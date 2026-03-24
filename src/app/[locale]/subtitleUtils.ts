@@ -26,6 +26,7 @@ export interface SubtitlePreprocessOptions {
   removeRoundBracketSdh: boolean;
   removeSquareBracketSdh: boolean;
   removeCornerBracketSdh: boolean;
+  removeInlineFormattingTags: boolean;
   removeSpeakerLabels: boolean;
   removeUppercaseSdh: boolean;
   mergeSameTimestamps: boolean;
@@ -130,13 +131,19 @@ const isLikelyUppercaseSdhLine = (line: string) => {
   return (LATIN_SDH_KEYWORD_REGEX.test(normalized) || words.length <= 6) && uppercaseRatio >= 0.85;
 };
 
-const processCueLines = (textLines: string[], options: SubtitlePreprocessOptions) => {
+const stripInlineFormattingTags = (line: string) => line.replace(/<\/?[A-Za-z][^>]*>/g, " ").replace(/\{\\[^}]+\}/g, " ");
+
+const processCueLines = (textLines: string[], options: SubtitlePreprocessOptions, fileType?: SubtitleFileType) => {
   const cleanedLines = textLines
     .map((line) => {
       let nextLine = line.trim();
 
       if (!nextLine) {
         return "";
+      }
+
+      if (options.removeInlineFormattingTags && (fileType === "srt" || fileType === "vtt")) {
+        nextLine = stripInlineFormattingTags(nextLine);
       }
 
       if (options.removeRoundBracketSdh) {
@@ -283,7 +290,7 @@ const preprocessTimedCueBlocks = (text: string, fileType: "srt" | "vtt", options
     }
 
     originalCueCount++;
-    const processedTextLines = processCueLines(block.textLines, options);
+    const processedTextLines = processCueLines(block.textLines, options, fileType);
 
     if (processedTextLines.length === 0) {
       removedCueCount++;
@@ -346,7 +353,7 @@ const preprocessAssContent = (text: string, options: SubtitlePreprocessOptions) 
       .trim()
       .replace(ASS_NEWLINE_REGEX, "\n")
       .split("\n");
-    const processedTextLines = processCueLines(textLines, options);
+    const processedTextLines = processCueLines(textLines, options, "ass");
 
     if (processedTextLines.length === 0) {
       removedCueCount++;
@@ -406,7 +413,7 @@ const preprocessLrcContent = (text: string, options: SubtitlePreprocessOptions) 
     }
 
     originalCueCount++;
-    const processedTextLines = processCueLines([line.replace(LRC_TIME_TAG_REGEX, "").trim()], options);
+    const processedTextLines = processCueLines([line.replace(LRC_TIME_TAG_REGEX, "").trim()], options, "lrc");
 
     if (processedTextLines.length === 0) {
       removedCueCount++;

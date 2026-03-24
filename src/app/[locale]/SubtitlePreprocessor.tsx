@@ -31,6 +31,8 @@ const PREPROCESSOR_TEXT = {
     removeSquareBracketSdhHint: "包含 [] 和 ［］，常见于平台字幕： [MUSIC]、[door opens]、[笑]、[拍手]",
     removeCornerBracketSdh: "移除【】类 SDH",
     removeCornerBracketSdhHint: "常见于中文、日系熟肉或电视字幕： 【脚步声】、【旁白】、【电话铃声】",
+    removeInlineFormattingTags: "移除内联格式标记",
+    removeInlineFormattingTagsHint: "用于清理 SRT/VTT 中的 <i>、<b>、<u>、<font> 以及 {\\an8} 这类内联样式标记",
     removeSpeakerLabels: "移除说话人标签",
     removeSpeakerLabelsHint: "例如 SOME ONE SAY: hello、JOHN: hello",
     removeUppercaseSdh: "移除全大写音效提示",
@@ -58,6 +60,8 @@ const PREPROCESSOR_TEXT = {
     removeSquareBracketSdhHint: "Includes [] and ［］. Common in streaming/platform captions: [MUSIC], [door opens], [笑]",
     removeCornerBracketSdh: "Remove 【】 SDH",
     removeCornerBracketSdhHint: "Common in Chinese and Japanese fan/TV subtitles: 【脚步声】, 【旁白】, 【电话铃声】",
+    removeInlineFormattingTags: "Remove inline formatting tags",
+    removeInlineFormattingTagsHint: "Cleans SRT/VTT tags such as <i>, <b>, <u>, <font>, and inline markers like {\\an8}",
     removeSpeakerLabels: "Remove speaker labels",
     removeSpeakerLabelsHint: "Examples: SOME ONE SAY: hello, JOHN: hello",
     removeUppercaseSdh: "Remove uppercase sound cues",
@@ -113,6 +117,7 @@ const SubtitlePreprocessor = ({ onUseProcessedText }: SubtitlePreprocessorProps)
   const [removeRoundBracketSdh, setRemoveRoundBracketSdh] = useLocalStorage("subtitlePreprocessRemoveRoundBracketSdh", true);
   const [removeSquareBracketSdh, setRemoveSquareBracketSdh] = useLocalStorage("subtitlePreprocessRemoveSquareBracketSdh", true);
   const [removeCornerBracketSdh, setRemoveCornerBracketSdh] = useLocalStorage("subtitlePreprocessRemoveCornerBracketSdh", true);
+  const [removeInlineFormattingTags, setRemoveInlineFormattingTags] = useLocalStorage("subtitlePreprocessRemoveInlineFormattingTags", true);
   const [removeSpeakerLabels, setRemoveSpeakerLabels] = useLocalStorage("subtitlePreprocessRemoveSpeakerLabels", true);
   const [removeUppercaseSdh, setRemoveUppercaseSdh] = useLocalStorage("subtitlePreprocessRemoveUppercaseSdh", false);
   const [mergeSameTimestamps, setMergeSameTimestamps] = useLocalStorage("subtitlePreprocessMergeSameTimestamps", true);
@@ -141,6 +146,7 @@ const SubtitlePreprocessor = ({ onUseProcessedText }: SubtitlePreprocessorProps)
       removeRoundBracketSdh,
       removeSquareBracketSdh,
       removeCornerBracketSdh,
+      removeInlineFormattingTags,
       removeSpeakerLabels,
       removeUppercaseSdh,
       mergeSameTimestamps,
@@ -306,14 +312,21 @@ const SubtitlePreprocessor = ({ onUseProcessedText }: SubtitlePreprocessorProps)
               </div>
 
               <div>
-                <Checkbox checked={removeCornerBracketSdh} onChange={(e) => setRemoveCornerBracketSdh(e.target.checked)}>
-                  {uiText.removeCornerBracketSdh}
-                </Checkbox>
-                <div className="pl-6 pt-1 text-xs text-gray-500">{uiText.removeCornerBracketSdhHint}</div>
-              </div>
+              <Checkbox checked={removeCornerBracketSdh} onChange={(e) => setRemoveCornerBracketSdh(e.target.checked)}>
+                {uiText.removeCornerBracketSdh}
+              </Checkbox>
+              <div className="pl-6 pt-1 text-xs text-gray-500">{uiText.removeCornerBracketSdhHint}</div>
+            </div>
 
-              <div>
-                <Checkbox checked={removeSpeakerLabels} onChange={(e) => setRemoveSpeakerLabels(e.target.checked)}>
+            <div>
+              <Checkbox checked={removeInlineFormattingTags} onChange={(e) => setRemoveInlineFormattingTags(e.target.checked)}>
+                {uiText.removeInlineFormattingTags}
+              </Checkbox>
+              <div className="pl-6 pt-1 text-xs text-gray-500">{uiText.removeInlineFormattingTagsHint}</div>
+            </div>
+
+            <div>
+              <Checkbox checked={removeSpeakerLabels} onChange={(e) => setRemoveSpeakerLabels(e.target.checked)}>
                   {uiText.removeSpeakerLabels}
                 </Checkbox>
                 <div className="pl-6 pt-1 text-xs text-gray-500">{uiText.removeSpeakerLabelsHint}</div>
