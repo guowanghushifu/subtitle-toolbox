@@ -5,6 +5,8 @@ import dynamic from "next/dynamic";
 import { Tabs, TabsProps, Typography, Spin } from "antd";
 import { VideoCameraOutlined, QuestionCircleOutlined } from "@ant-design/icons";
 import SubtitleTranslator from "./SubtitleTranslator";
+import SubtitlePreprocessor from "./SubtitlePreprocessor";
+import SubtitleBilingualComposer from "./SubtitleBilingualComposer";
 import { useTranslations, useLocale } from "next-intl";
 import { TranslationProvider } from "@/app/components/TranslationContext";
 import { getDocUrl } from "@/app/utils";
@@ -24,18 +26,39 @@ const ClientPage = () => {
   const t = useTranslations("common");
   const locale = useLocale();
   const userGuideUrl = getDocUrl("guide/translation/subtitle-translator/index.html", locale);
-  // 使用时间戳来强制重新渲染
-  const [activeKey, setActiveKey] = useState("basic");
+  const preprocessTabLabel = locale.startsWith("zh") ? "预处理区" : "Preprocess";
+  const bilingualTabLabel = locale.startsWith("zh") ? "双语合成" : "Bilingual";
+  const [activeKey, setActiveKey] = useState("preprocess");
+  const [incomingSourceText, setIncomingSourceText] = useState<{ id: number; content: string; fileName?: string } | null>(null);
 
   const handleTabChange = (key: string) => {
     setActiveKey(key);
   };
 
+  const handleUseProcessedText = (content: string, fileName?: string) => {
+    setIncomingSourceText({
+      id: Date.now(),
+      content,
+      fileName,
+    });
+    setActiveKey("basic");
+  };
+
   const items: TabsProps["items"] = [
+    {
+      key: "preprocess",
+      label: preprocessTabLabel,
+      children: <SubtitlePreprocessor onUseProcessedText={handleUseProcessedText} />,
+    },
     {
       key: "basic",
       label: t("basicTab"),
-      children: <SubtitleTranslator />,
+      children: <SubtitleTranslator incomingSourceText={incomingSourceText} />,
+    },
+    {
+      key: "bilingual",
+      label: bilingualTabLabel,
+      children: <SubtitleBilingualComposer />,
     },
     {
       key: "advanced",

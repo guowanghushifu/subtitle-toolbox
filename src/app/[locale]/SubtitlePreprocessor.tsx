@@ -1,0 +1,393 @@
+"use client";
+
+import React, { useMemo, useState, useSyncExternalStore } from "react";
+import { App, Button, Card, Checkbox, Col, Divider, Flex, Input, Row, Skeleton, Space, Typography, Upload } from "antd";
+import { ClearOutlined, CopyOutlined, DownloadOutlined, InboxOutlined, SendOutlined, ToolOutlined } from "@ant-design/icons";
+import { useLocale, useTranslations } from "next-intl";
+import useFileUpload from "@/app/hooks/useFileUpload";
+import { useCopyToClipboard } from "@/app/hooks/useCopyToClipboard";
+import { useLocalStorage } from "@/app/hooks/useLocalStorage";
+import { useTextStats } from "@/app/hooks/useTextStats";
+import { downloadFile, getFileTypePresetConfig } from "@/app/utils";
+import { preprocessSubtitleContent, type SubtitleFileType } from "./subtitleUtils";
+
+const { Dragger } = Upload;
+const { TextArea } = Input;
+const { Paragraph, Text } = Typography;
+
+const uploadFileTypes = getFileTypePresetConfig("subtitle");
+
+const PREPROCESSOR_TEXT = {
+  zh: {
+    tabLabel: "预处理区",
+    title: "字幕预处理",
+    description: "先清理 SDH 提示，再按选项合并字幕内容。处理完成后可以直接送到翻译区，或先保存到本地。",
+    optionsTitle: "预处理选项",
+    bracketedSdhTitle: "括号包裹的 SDH 提示",
+    bracketedSdhHint: "影视字幕里常见的包裹形式主要是圆括号、方括号和【】类方头括号，已分别拆成独立选项。",
+    removeRoundBracketSdh: "移除圆括号 SDH",
+    removeRoundBracketSdhHint: "包含 () 和 （），常见于欧美、日韩字幕： (sighs)、(whispering)、（叹气）、（旁白）",
+    removeSquareBracketSdh: "移除方括号 SDH",
+    removeSquareBracketSdhHint: "包含 [] 和 ［］，常见于平台字幕： [MUSIC]、[door opens]、[笑]、[拍手]",
+    removeCornerBracketSdh: "移除【】类 SDH",
+    removeCornerBracketSdhHint: "常见于中文、日系熟肉或电视字幕： 【脚步声】、【旁白】、【电话铃声】",
+    removeSpeakerLabels: "移除说话人标签",
+    removeSpeakerLabelsHint: "例如 SOME ONE SAY: hello、JOHN: hello",
+    removeUppercaseSdh: "移除全大写音效提示",
+    removeUppercaseSdhHint: "例如 MUSIC、DOOR OPENS、LOUD BREATHING",
+    mergeSameTimestamps: "合并相同时间戳的字幕",
+    mergeSameTimestampsHint: "同一时间范围出现多条字幕时，用空格合并成一条",
+    mergeLinesWithinCue: "合并同一字幕块内多行",
+    mergeLinesWithinCueHint: "同一时间戳里的多行内容会合并到同一行",
+    resultTitle: "预处理结果",
+    noProcessedText: "请先完成字幕预处理",
+    sentToTranslate: "已提交到翻译区",
+    sendToTranslate: "提交到翻译区",
+    processedStats: (output: number, original: number, removed: number, merged: number) => `输出 ${output}/${original} 条，移除 ${removed} 条，合并 ${merged} 处`,
+  },
+  en: {
+    tabLabel: "Preprocess",
+    title: "Subtitle Preprocess",
+    description: "Clean SDH cues before translation, then merge subtitle content based on your options. You can save the result locally or send it straight to the translation tab.",
+    optionsTitle: "Preprocess Options",
+    bracketedSdhTitle: "Bracketed SDH cues",
+    bracketedSdhHint: "Common wrappers in TV and film subtitles are round brackets, square brackets, and CJK corner brackets, so these are split into separate toggles.",
+    removeRoundBracketSdh: "Remove round-bracket SDH",
+    removeRoundBracketSdhHint: "Includes () and （）. Common in Western and East Asian subtitles: (sighs), (whispering), （旁白）",
+    removeSquareBracketSdh: "Remove square-bracket SDH",
+    removeSquareBracketSdhHint: "Includes [] and ［］. Common in streaming/platform captions: [MUSIC], [door opens], [笑]",
+    removeCornerBracketSdh: "Remove 【】 SDH",
+    removeCornerBracketSdhHint: "Common in Chinese and Japanese fan/TV subtitles: 【脚步声】, 【旁白】, 【电话铃声】",
+    removeSpeakerLabels: "Remove speaker labels",
+    removeSpeakerLabelsHint: "Examples: SOME ONE SAY: hello, JOHN: hello",
+    removeUppercaseSdh: "Remove uppercase sound cues",
+    removeUppercaseSdhHint: "Examples: MUSIC, DOOR OPENS, LOUD BREATHING",
+    mergeSameTimestamps: "Merge subtitles with identical timestamps",
+    mergeSameTimestampsHint: "Combine subtitles in the same time range into one line with spaces",
+    mergeLinesWithinCue: "Merge multi-line subtitles inside one cue",
+    mergeLinesWithinCueHint: "Join multiple lines inside the same subtitle cue with spaces",
+    resultTitle: "Preprocessed Result",
+    noProcessedText: "Process the subtitle content first",
+    sentToTranslate: "Sent to the translation tab",
+    sendToTranslate: "Send to Translate",
+    processedStats: (output: number, original: number, removed: number, merged: number) => `Kept ${output}/${original} cues, removed ${removed}, merged ${merged}`,
+  },
+} as const;
+
+interface SubtitlePreprocessorProps {
+  onUseProcessedText: (text: string, fileName?: string) => void;
+}
+
+const buildProcessedFileName = (originalFileName: string, fileType: SubtitleFileType) => {
+  const lastDotIndex = originalFileName.lastIndexOf(".");
+  const baseName = lastDotIndex > 0 ? originalFileName.slice(0, lastDotIndex) : originalFileName || "subtitle";
+  return `${baseName}_preprocessed.${fileType}`;
+};
+
+const SubtitlePreprocessor = ({ onUseProcessedText }: SubtitlePreprocessorProps) => {
+  const locale = useLocale();
+  const t = useTranslations("common");
+  const tSubtitle = useTranslations("subtitle");
+  const { message } = App.useApp();
+  const { copyToClipboard } = useCopyToClipboard();
+  const uiText = useMemo(() => (locale.startsWith("zh") ? PREPROCESSOR_TEXT.zh : PREPROCESSOR_TEXT.en), [locale]);
+  const {
+    isFileProcessing,
+    fileList,
+    sourceText,
+    setSourceText,
+    handleFileUpload,
+    handleUploadRemove,
+    handleUploadChange,
+    resetUpload,
+  } = useFileUpload();
+  const [processedText, setProcessedText] = useState("");
+  const [processedFileType, setProcessedFileType] = useState<SubtitleFileType | null>(null);
+  const [sourceFileName, setSourceFileName] = useState("");
+  const [processSummary, setProcessSummary] = useState("");
+  const isHydrated = useSyncExternalStore(
+    () => () => undefined,
+    () => true,
+    () => false,
+  );
+  const [removeRoundBracketSdh, setRemoveRoundBracketSdh] = useLocalStorage("subtitlePreprocessRemoveRoundBracketSdh", true);
+  const [removeSquareBracketSdh, setRemoveSquareBracketSdh] = useLocalStorage("subtitlePreprocessRemoveSquareBracketSdh", true);
+  const [removeCornerBracketSdh, setRemoveCornerBracketSdh] = useLocalStorage("subtitlePreprocessRemoveCornerBracketSdh", true);
+  const [removeSpeakerLabels, setRemoveSpeakerLabels] = useLocalStorage("subtitlePreprocessRemoveSpeakerLabels", true);
+  const [removeUppercaseSdh, setRemoveUppercaseSdh] = useLocalStorage("subtitlePreprocessRemoveUppercaseSdh", false);
+  const [mergeSameTimestamps, setMergeSameTimestamps] = useLocalStorage("subtitlePreprocessMergeSameTimestamps", true);
+  const [mergeLinesWithinCue, setMergeLinesWithinCue] = useLocalStorage("subtitlePreprocessMergeLinesWithinCue", true);
+
+  const sourceStats = useTextStats(sourceText);
+  const resultStats = useTextStats(processedText);
+
+  const clearProcessedResult = () => {
+    setProcessedText("");
+    setProcessedFileType(null);
+    setProcessSummary("");
+  };
+
+  const clearSourceFileName = () => {
+    setSourceFileName("");
+  };
+
+  const handleProcess = () => {
+    if (!sourceText.trim()) {
+      message.error(tSubtitle("noSourceText"));
+      return;
+    }
+
+    const result = preprocessSubtitleContent(sourceText, {
+      removeRoundBracketSdh,
+      removeSquareBracketSdh,
+      removeCornerBracketSdh,
+      removeSpeakerLabels,
+      removeUppercaseSdh,
+      mergeSameTimestamps,
+      mergeLinesWithinCue,
+    });
+
+    if (!result) {
+      message.error(tSubtitle("unsupportedSub"));
+      return;
+    }
+
+    setProcessedText(result.content);
+    setProcessedFileType(result.fileType);
+    setProcessSummary(
+      uiText.processedStats(result.stats.outputCueCount, result.stats.originalCueCount, result.stats.removedCueCount, result.stats.mergedCueCount),
+    );
+    message.success(t("textProcessed"));
+  };
+
+  const handleDownload = async () => {
+    if (!processedText || !processedFileType) {
+      message.warning(uiText.noProcessedText);
+      return;
+    }
+
+    const fileName = buildProcessedFileName(sourceFileName || "subtitle", processedFileType);
+    await downloadFile(processedText, fileName);
+    message.success(`${t("exportedFile")}: ${fileName}`);
+  };
+
+  const handleSendToTranslate = () => {
+    if (!processedText) {
+      message.warning(uiText.noProcessedText);
+      return;
+    }
+
+    onUseProcessedText(processedText, sourceFileName ? buildProcessedFileName(sourceFileName, processedFileType || "srt") : undefined);
+    message.success(uiText.sentToTranslate);
+  };
+
+  return (
+    <Row gutter={[24, 24]}>
+      <Col xs={24} lg={14} xl={15}>
+        <Card
+          title={
+            <Space>
+              <ToolOutlined /> {uiText.title}
+            </Space>
+          }
+          extra={
+            <Button
+              type="text"
+              danger
+              onClick={() => {
+                resetUpload();
+                clearSourceFileName();
+                clearProcessedResult();
+                message.success(t("resetUploadSuccess"));
+              }}
+              icon={<ClearOutlined />}>
+              {t("resetUpload")}
+            </Button>
+          }
+          className="shadow-md border-transparent hover:shadow-lg transition-shadow duration-300">
+          <Paragraph type="secondary" className="!mb-4">
+            {uiText.description}
+          </Paragraph>
+
+          <Dragger
+            customRequest={({ file }) => {
+              clearProcessedResult();
+              resetUpload();
+              setSourceFileName((file as File).name || "");
+              handleFileUpload(file as File);
+            }}
+            accept={uploadFileTypes.accept}
+            multiple={false}
+            maxCount={1}
+            showUploadList
+            onRemove={(file) => {
+              clearProcessedResult();
+              if (fileList.length <= 1) {
+                clearSourceFileName();
+              }
+              return handleUploadRemove(file);
+            }}
+            onChange={(info) => {
+              clearProcessedResult();
+              setSourceFileName(info.file?.name || sourceFileName);
+              handleUploadChange(info);
+            }}
+            fileList={fileList}>
+            <p className="ant-upload-drag-icon">
+              <InboxOutlined />
+            </p>
+            <p className="ant-upload-text">{t("dragAndDropText")}</p>
+            <p className="ant-upload-hint">
+              {t("supportedFormats")} {uploadFileTypes.label}
+            </p>
+          </Dragger>
+
+          <TextArea
+            placeholder={t("pasteUploadContent")}
+            value={sourceStats.isEditable ? sourceText : sourceStats.displayText}
+            onChange={
+              sourceStats.isEditable
+                ? (e) => {
+                    clearProcessedResult();
+                    setSourceText(e.target.value);
+                  }
+                : undefined
+            }
+            rows={10}
+            className="mt-4"
+            allowClear
+            readOnly={!sourceStats.isEditable}
+            aria-label={uiText.title}
+          />
+
+          {sourceText && (
+            <Flex justify="end" className="mt-2">
+              <Text type="secondary" className="!text-xs">
+                {sourceStats.charCount} {t("charLabel")} / {sourceStats.lineCount} {t("lineLabel")}
+              </Text>
+            </Flex>
+          )}
+
+          <Divider />
+
+          <Button type="primary" size="large" block icon={<ToolOutlined />} loading={isFileProcessing} onClick={handleProcess}>
+            {t("startProcess")}
+          </Button>
+        </Card>
+      </Col>
+
+      <Col xs={24} lg={10} xl={9}>
+        <Card
+          title={
+            <Space>
+              <ToolOutlined /> {uiText.optionsTitle}
+            </Space>
+          }
+          className="shadow-md border-transparent hover:shadow-lg transition-shadow duration-300">
+          {isHydrated ? (
+            <Flex vertical gap="middle">
+              <div>
+                <Text strong>{uiText.bracketedSdhTitle}</Text>
+                <div className="pt-1 text-xs text-gray-500">{uiText.bracketedSdhHint}</div>
+              </div>
+
+              <div>
+                <Checkbox checked={removeRoundBracketSdh} onChange={(e) => setRemoveRoundBracketSdh(e.target.checked)}>
+                  {uiText.removeRoundBracketSdh}
+                </Checkbox>
+                <div className="pl-6 pt-1 text-xs text-gray-500">{uiText.removeRoundBracketSdhHint}</div>
+              </div>
+
+              <div>
+                <Checkbox checked={removeSquareBracketSdh} onChange={(e) => setRemoveSquareBracketSdh(e.target.checked)}>
+                  {uiText.removeSquareBracketSdh}
+                </Checkbox>
+                <div className="pl-6 pt-1 text-xs text-gray-500">{uiText.removeSquareBracketSdhHint}</div>
+              </div>
+
+              <div>
+                <Checkbox checked={removeCornerBracketSdh} onChange={(e) => setRemoveCornerBracketSdh(e.target.checked)}>
+                  {uiText.removeCornerBracketSdh}
+                </Checkbox>
+                <div className="pl-6 pt-1 text-xs text-gray-500">{uiText.removeCornerBracketSdhHint}</div>
+              </div>
+
+              <div>
+                <Checkbox checked={removeSpeakerLabels} onChange={(e) => setRemoveSpeakerLabels(e.target.checked)}>
+                  {uiText.removeSpeakerLabels}
+                </Checkbox>
+                <div className="pl-6 pt-1 text-xs text-gray-500">{uiText.removeSpeakerLabelsHint}</div>
+              </div>
+
+              <div>
+                <Checkbox checked={removeUppercaseSdh} onChange={(e) => setRemoveUppercaseSdh(e.target.checked)}>
+                  {uiText.removeUppercaseSdh}
+                </Checkbox>
+                <div className="pl-6 pt-1 text-xs text-gray-500">{uiText.removeUppercaseSdhHint}</div>
+              </div>
+
+              <Divider className="!my-1" />
+
+              <div>
+                <Checkbox checked={mergeSameTimestamps} onChange={(e) => setMergeSameTimestamps(e.target.checked)}>
+                  {uiText.mergeSameTimestamps}
+                </Checkbox>
+                <div className="pl-6 pt-1 text-xs text-gray-500">{uiText.mergeSameTimestampsHint}</div>
+              </div>
+
+              <div>
+                <Checkbox checked={mergeLinesWithinCue} onChange={(e) => setMergeLinesWithinCue(e.target.checked)}>
+                  {uiText.mergeLinesWithinCue}
+                </Checkbox>
+                <div className="pl-6 pt-1 text-xs text-gray-500">{uiText.mergeLinesWithinCueHint}</div>
+              </div>
+            </Flex>
+          ) : (
+            <Skeleton active paragraph={{ rows: 8 }} title={false} />
+          )}
+        </Card>
+      </Col>
+
+      {processedText && (
+        <Col span={24}>
+          <Card
+            title={uiText.resultTitle}
+            className="shadow-md border-transparent hover:shadow-lg transition-shadow duration-300"
+            extra={
+              <Space wrap>
+                <Button type="text" icon={<CopyOutlined />} onClick={() => copyToClipboard(processedText)}>
+                  {t("copy")}
+                </Button>
+                <Button type="primary" ghost icon={<DownloadOutlined />} onClick={handleDownload}>
+                  {t("exportFile")}
+                </Button>
+                <Button type="primary" icon={<SendOutlined />} onClick={handleSendToTranslate}>
+                  {uiText.sendToTranslate}
+                </Button>
+              </Space>
+            }>
+            <TextArea
+              value={resultStats.isEditable ? processedText : resultStats.displayText}
+              onChange={resultStats.isEditable ? (e) => setProcessedText(e.target.value) : undefined}
+              rows={10}
+              readOnly={!resultStats.isEditable}
+              aria-label={uiText.resultTitle}
+            />
+            <Flex justify="end" className="mt-2">
+              <Text type="secondary" className="!text-xs">
+                {resultStats.charCount} {t("charLabel")} / {resultStats.lineCount} {t("lineLabel")}
+              </Text>
+            </Flex>
+          </Card>
+          {processSummary && (
+            <Text type="secondary" className="mt-3 block">
+              {processSummary}
+            </Text>
+          )}
+        </Col>
+      )}
+    </Row>
+  );
+};
+
+export default SubtitlePreprocessor;

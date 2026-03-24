@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { normalizeNewlines } from "@/app/utils";
 import type { UploadFile, UploadProps } from "antd";
 
@@ -53,6 +53,24 @@ const useFileUpload = () => {
     setSourceText("");
     setUploadMode("single");
   };
+
+  const loadTextContent = useCallback((text: string, fileName?: string) => {
+    if (fileName) {
+      setFileList([
+        {
+          uid: "injected-source",
+          name: fileName,
+          status: "done",
+        },
+      ]);
+      setMultipleFiles([new File([text], fileName, { type: "text/plain" })]);
+    } else {
+      setFileList([]);
+      setMultipleFiles([]);
+    }
+    setUploadMode("single");
+    setSourceText(normalizeNewlines(text));
+  }, []);
 
   const handleUploadChange: UploadProps["onChange"] = ({ fileList }: { fileList: UploadFile[] }) => {
     const updatedFileList: UploadFile[] = fileList.map((f) => ({
@@ -137,6 +155,7 @@ const useFileUpload = () => {
     handleUploadRemove,
     handleUploadChange,
     resetUpload,
+    loadTextContent,
   };
 };
 
