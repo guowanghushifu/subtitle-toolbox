@@ -2,14 +2,14 @@
 
 import React, { useMemo, useState, useSyncExternalStore } from "react";
 import { App, Button, Card, Checkbox, Col, Divider, Flex, Input, Row, Skeleton, Space, Typography, Upload } from "antd";
-import { ClearOutlined, CopyOutlined, DownloadOutlined, InboxOutlined, SendOutlined, ToolOutlined } from "@ant-design/icons";
+import { ClearOutlined, CopyOutlined, DownloadOutlined, InboxOutlined, ToolOutlined } from "@ant-design/icons";
 import { useLocale, useTranslations } from "next-intl";
 import useFileUpload from "@/app/hooks/useFileUpload";
 import { useCopyToClipboard } from "@/app/hooks/useCopyToClipboard";
 import { useLocalStorage } from "@/app/hooks/useLocalStorage";
 import { useTextStats } from "@/app/hooks/useTextStats";
 import { downloadFile, getFileTypePresetConfig } from "@/app/utils";
-import { preprocessSubtitleContent, type SubtitleFileType, type SubtitlePreprocessLogEntry } from "./subtitleUtils";
+import { preprocessSubtitleContent, type SubtitleFileType, type SubtitlePreprocessLogEntry } from "./local-subtitle-tools/localSubtitleUtils";
 
 const { Dragger } = Upload;
 const { TextArea } = Input;
@@ -90,17 +90,13 @@ const PREPROCESSOR_TEXT = {
   },
 } as const;
 
-interface SubtitlePreprocessorProps {
-  onUseProcessedText: (text: string, fileName?: string) => void;
-}
-
 const buildProcessedFileName = (originalFileName: string, fileType: SubtitleFileType) => {
   const lastDotIndex = originalFileName.lastIndexOf(".");
   const baseName = lastDotIndex > 0 ? originalFileName.slice(0, lastDotIndex) : originalFileName || "subtitle";
   return `${baseName}_preprocessed.${fileType}`;
 };
 
-const SubtitlePreprocessor = ({ onUseProcessedText }: SubtitlePreprocessorProps) => {
+const SubtitlePreprocessor = () => {
   const locale = useLocale();
   const t = useTranslations("common");
   const tSubtitle = useTranslations("subtitle");
@@ -206,16 +202,6 @@ const SubtitlePreprocessor = ({ onUseProcessedText }: SubtitlePreprocessorProps)
     const fileName = buildProcessedFileName(sourceFileName || "subtitle", processedFileType);
     await downloadFile(processedText, fileName);
     message.success(`${t("exportedFile")}: ${fileName}`);
-  };
-
-  const handleSendToTranslate = () => {
-    if (!processedText) {
-      message.warning(uiText.noProcessedText);
-      return;
-    }
-
-    onUseProcessedText(processedText, sourceFileName ? buildProcessedFileName(sourceFileName, processedFileType || "srt") : undefined);
-    message.success(uiText.sentToTranslate);
   };
 
   return (
@@ -404,9 +390,6 @@ const SubtitlePreprocessor = ({ onUseProcessedText }: SubtitlePreprocessorProps)
                 </Button>
                 <Button type="primary" ghost icon={<DownloadOutlined />} onClick={handleDownload}>
                   {t("exportFile")}
-                </Button>
-                <Button type="primary" icon={<SendOutlined />} onClick={handleSendToTranslate}>
-                  {uiText.sendToTranslate}
                 </Button>
               </Space>
             }>

@@ -13,7 +13,7 @@ import {
   bilingualAssSdrTemplate,
   composeBilingualSubtitle,
   type BilingualComposeLogEntry,
-} from "./subtitleUtils";
+} from "./local-subtitle-tools/localSubtitleUtils";
 
 const { Dragger } = Upload;
 const { TextArea } = Input;

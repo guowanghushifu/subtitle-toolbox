@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React from "react";
 import dynamic from "next/dynamic";
 import { Tabs, TabsProps, Typography, Spin } from "antd";
 import { VideoCameraOutlined, QuestionCircleOutlined } from "@ant-design/icons";
@@ -28,32 +28,17 @@ const ClientPage = () => {
   const userGuideUrl = getDocUrl("guide/translation/subtitle-translator/index.html", locale);
   const preprocessTabLabel = locale.startsWith("zh") ? "预处理区" : "Preprocess";
   const bilingualTabLabel = locale.startsWith("zh") ? "双语合成" : "Bilingual";
-  const [activeKey, setActiveKey] = useState("preprocess");
-  const [incomingSourceText, setIncomingSourceText] = useState<{ id: number; content: string; fileName?: string } | null>(null);
-
-  const handleTabChange = (key: string) => {
-    setActiveKey(key);
-  };
-
-  const handleUseProcessedText = (content: string, fileName?: string) => {
-    setIncomingSourceText({
-      id: Date.now(),
-      content,
-      fileName,
-    });
-    setActiveKey("basic");
-  };
 
   const items: TabsProps["items"] = [
     {
       key: "preprocess",
       label: preprocessTabLabel,
-      children: <SubtitlePreprocessor onUseProcessedText={handleUseProcessedText} />,
+      children: <SubtitlePreprocessor />,
     },
     {
       key: "basic",
       label: t("basicTab"),
-      children: <SubtitleTranslator incomingSourceText={incomingSourceText} />,
+      children: <SubtitleTranslator />,
     },
     {
       key: "bilingual",
@@ -79,7 +64,7 @@ const ClientPage = () => {
         {tSubtitle("clientDescription")}
         {t("privacyNotice")}
       </Paragraph>
-      <Tabs activeKey={activeKey} onChange={handleTabChange} items={items} type="card" className="w-full" animated={{ inkBar: true, tabPane: true }} />
+      <Tabs defaultActiveKey="preprocess" items={items} type="card" className="w-full" animated={{ inkBar: true, tabPane: true }} />
     </TranslationProvider>
   );
 };

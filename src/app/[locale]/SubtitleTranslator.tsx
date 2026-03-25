@@ -29,15 +29,7 @@ const { Text } = Typography;
 
 const uploadFileTypes = getFileTypePresetConfig("subtitle");
 
-interface SubtitleTranslatorProps {
-  incomingSourceText?: {
-    id: number;
-    content: string;
-    fileName?: string;
-  } | null;
-}
-
-const SubtitleTranslator = ({ incomingSourceText }: SubtitleTranslatorProps) => {
+const SubtitleTranslator = () => {
   const tSubtitle = useTranslations("subtitle");
   const t = useTranslations("common");
 
@@ -58,7 +50,6 @@ const SubtitleTranslator = ({ incomingSourceText }: SubtitleTranslatorProps) => 
     handleUploadRemove,
     handleUploadChange,
     resetUpload,
-    loadTextContent,
   } = useFileUpload();
   // ... useTranslationContext destructuring ...
   const {
@@ -117,16 +108,6 @@ const SubtitleTranslator = ({ incomingSourceText }: SubtitleTranslatorProps) => 
     setExtractedText("");
     setTranslatedText("");
   }, [sourceText, setExtractedText, setTranslatedText]);
-
-  useEffect(() => {
-    if (!incomingSourceText?.content) {
-      return;
-    }
-
-    loadTextContent(incomingSourceText.content, incomingSourceText.fileName);
-    setExtractedText("");
-    setTranslatedText("");
-  }, [incomingSourceText, loadTextContent, setExtractedText, setTranslatedText]);
 
   const performTranslation = async (sourceText: string, fileNameSet?: string, fileIndex?: number, totalFiles?: number) => {
     const lines = splitTextIntoLines(sourceText);
