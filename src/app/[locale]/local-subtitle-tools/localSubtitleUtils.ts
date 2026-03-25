@@ -20,7 +20,7 @@ const TIME_REGEX = /^(?:(\d+):)?(\d{2}):(\d{2})[,.](\d{1,3})$/;
 const ASS_ALL_TAGS_REGEX = /\{[^}]*\}/g;
 const ASS_NEWLINE_REGEX = /\\[Nn]/g;
 const ASS_DIALOGUE_REGEX = /^Dialogue:/i;
-const VTT_SRT_TIMELINE_REGEX = /^(?<start>(?:\d+:)?\d{2}:\d{2}[,.]\d{1,3})\s+-->\s+(?<end>(?:\d+:)?\d{2}:\d{2}[,.]\d{1,3})/;
+const VTT_SRT_TIMELINE_REGEX = /^((?:\d+:)?\d{2}:\d{2}[,.]\d{1,3})\s+-->\s+((?:\d+:)?\d{2}:\d{2}[,.]\d{1,3})/;
 const ASS_EVENTS_HEADER = `[Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`;
 const TRAILING_DIALOGUE_PUNCTUATION_REGEX = /[!?.,;:。？！：；，]$/;
@@ -525,7 +525,7 @@ const preprocessLrcContent = (text: string, options: SubtitlePreprocessOptions) 
   return {
     content: outputLines
       .map((line) => {
-        if ("type" in line && line.type === "raw") {
+        if ("type" in line) {
           return line.line;
         }
 
@@ -656,12 +656,12 @@ const parseTimedTimelineCues = (text: string): TimelineCue[] => {
     .filter((block): block is TimedCueBlock => block.type === "cue")
     .map((block) => {
       const match = block.timeLine.trim().match(VTT_SRT_TIMELINE_REGEX);
-      if (!match?.groups) {
+      if (!match) {
         return null;
       }
 
-      const startMs = parseVttSrtTimeToMs(match.groups.start);
-      const endMs = parseVttSrtTimeToMs(match.groups.end);
+      const startMs = parseVttSrtTimeToMs(match[1]);
+      const endMs = parseVttSrtTimeToMs(match[2]);
       if (startMs === null || endMs === null) {
         return null;
       }
