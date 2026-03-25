@@ -123,6 +123,7 @@ const SubtitleBilingualComposer = () => {
   const [resultText, setResultText] = useState("");
   const [resultSummary, setResultSummary] = useState("");
   const [logs, setLogs] = useState<BilingualComposeLogEntry[]>([]);
+  const [translatedSourceFileName, setTranslatedSourceFileName] = useState("");
 
   const isProcessing = originalUpload.isFileProcessing || translatedUpload.isFileProcessing;
   const currentTemplateDraft = assTemplateMode === "hdr" ? hdrTemplateDraft : sdrTemplateDraft;
@@ -160,6 +161,9 @@ const SubtitleBilingualComposer = () => {
           icon={<ClearOutlined />}
           onClick={() => {
             upload.resetUpload();
+            if (upload === translatedUpload) {
+              setTranslatedSourceFileName("");
+            }
             clearResults();
           }}>
           {t("resetUpload")}
@@ -167,6 +171,9 @@ const SubtitleBilingualComposer = () => {
       }>
       <Dragger
         customRequest={({ file }) => {
+          if (upload === translatedUpload) {
+            setTranslatedSourceFileName((file as File).name || "");
+          }
           handleUpload(upload, file as File);
         }}
         accept={uploadFileTypes.accept}
@@ -175,10 +182,16 @@ const SubtitleBilingualComposer = () => {
         showUploadList
         onRemove={(file) => {
           clearResults();
+          if (upload === translatedUpload && upload.fileList.length <= 1) {
+            setTranslatedSourceFileName("");
+          }
           return upload.handleUploadRemove(file);
         }}
         onChange={(info) => {
           clearResults();
+          if (upload === translatedUpload) {
+            setTranslatedSourceFileName(info.file?.name || translatedSourceFileName);
+          }
           upload.handleUploadChange(info);
         }}
         fileList={upload.fileList}>
@@ -245,7 +258,7 @@ const SubtitleBilingualComposer = () => {
       return;
     }
 
-    const fileName = buildBilingualFileName(translatedUpload.fileList[0]?.name, outputFormat);
+    const fileName = buildBilingualFileName(translatedSourceFileName || translatedUpload.fileList[0]?.name, outputFormat);
     await downloadFile(resultText, fileName);
     message.success(`${t("exportedFile")}: ${fileName}`);
   };

@@ -9,7 +9,7 @@ import { useCopyToClipboard } from "@/app/hooks/useCopyToClipboard";
 import { useLocalStorage } from "@/app/hooks/useLocalStorage";
 import { useTextStats } from "@/app/hooks/useTextStats";
 import { downloadFile, getFileTypePresetConfig } from "@/app/utils";
-import { preprocessSubtitleContent, type SubtitleFileType } from "./subtitleUtils";
+import { preprocessSubtitleContent, type SubtitleFileType, type SubtitlePreprocessLogEntry } from "./subtitleUtils";
 
 const { Dragger } = Upload;
 const { TextArea } = Input;
@@ -46,6 +46,12 @@ const PREPROCESSOR_TEXT = {
     sentToTranslate: "已提交到翻译区",
     sendToTranslate: "提交到翻译区",
     processedStats: (output: number, original: number, removed: number, merged: number) => `输出 ${output}/${original} 条，移除 ${removed} 条，合并 ${merged} 处`,
+    logTitle: "SDH 清理日志",
+    noLogs: "这次处理没有移除任何 SDH 提示。",
+    roundBracketLog: "圆括号 SDH",
+    squareBracketLog: "方括号 SDH",
+    cornerBracketLog: "【】类 SDH",
+    uppercaseLog: "全大写音效提示",
   },
   en: {
     tabLabel: "Preprocess",
@@ -75,6 +81,12 @@ const PREPROCESSOR_TEXT = {
     sentToTranslate: "Sent to the translation tab",
     sendToTranslate: "Send to Translate",
     processedStats: (output: number, original: number, removed: number, merged: number) => `Kept ${output}/${original} cues, removed ${removed}, merged ${merged}`,
+    logTitle: "SDH Cleanup Log",
+    noLogs: "No SDH cues were removed in this run.",
+    roundBracketLog: "Round-bracket SDH",
+    squareBracketLog: "Square-bracket SDH",
+    cornerBracketLog: "【】 SDH",
+    uppercaseLog: "Uppercase sound cue",
   },
 } as const;
 
@@ -107,6 +119,7 @@ const SubtitlePreprocessor = ({ onUseProcessedText }: SubtitlePreprocessorProps)
   } = useFileUpload();
   const [processedText, setProcessedText] = useState("");
   const [processedFileType, setProcessedFileType] = useState<SubtitleFileType | null>(null);
+  const [processLogs, setProcessLogs] = useState<SubtitlePreprocessLogEntry[]>([]);
   const [sourceFileName, setSourceFileName] = useState("");
   const [processSummary, setProcessSummary] = useState("");
   const isHydrated = useSyncExternalStore(
@@ -125,10 +138,27 @@ const SubtitlePreprocessor = ({ onUseProcessedText }: SubtitlePreprocessorProps)
 
   const sourceStats = useTextStats(sourceText);
   const resultStats = useTextStats(processedText);
+  const logText =
+    processLogs.length === 0
+      ? uiText.noLogs
+      : processLogs
+          .map((log) => {
+            const label =
+              log.type === "round_bracket_sdh"
+                ? uiText.roundBracketLog
+                : log.type === "square_bracket_sdh"
+                  ? uiText.squareBracketLog
+                  : log.type === "corner_bracket_sdh"
+                    ? uiText.cornerBracketLog
+                    : uiText.uppercaseLog;
+            return `[${label}] ${log.key} ${log.text}`.trim();
+          })
+          .join("\n");
 
   const clearProcessedResult = () => {
     setProcessedText("");
     setProcessedFileType(null);
+    setProcessLogs([]);
     setProcessSummary("");
   };
 
@@ -160,6 +190,7 @@ const SubtitlePreprocessor = ({ onUseProcessedText }: SubtitlePreprocessorProps)
 
     setProcessedText(result.content);
     setProcessedFileType(result.fileType);
+    setProcessLogs(result.logs);
     setProcessSummary(
       uiText.processedStats(result.stats.outputCueCount, result.stats.originalCueCount, result.stats.removedCueCount, result.stats.mergedCueCount),
     );
@@ -397,6 +428,14 @@ const SubtitlePreprocessor = ({ onUseProcessedText }: SubtitlePreprocessorProps)
               {processSummary}
             </Text>
           )}
+        </Col>
+      )}
+
+      {(processedText || processLogs.length > 0) && (
+        <Col span={24}>
+          <Card title={uiText.logTitle} className="shadow-md border-transparent hover:shadow-lg transition-shadow duration-300">
+            <TextArea value={logText} rows={8} readOnly aria-label={uiText.logTitle} />
+          </Card>
         </Col>
       )}
     </Row>

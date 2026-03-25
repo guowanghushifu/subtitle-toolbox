@@ -42,6 +42,15 @@ export interface SubtitlePreprocessResult {
     removedCueCount: number;
     mergedCueCount: number;
   };
+  logs: SubtitlePreprocessLogEntry[];
+}
+
+export type SubtitlePreprocessLogType = "round_bracket_sdh" | "square_bracket_sdh" | "corner_bracket_sdh" | "uppercase_sdh";
+
+export interface SubtitlePreprocessLogEntry {
+  type: SubtitlePreprocessLogType;
+  key: string;
+  text: string;
 }
 
 interface StructuredCue {
@@ -72,6 +81,18 @@ interface RawLine {
 
 const normalizeCueText = (text: string) => text.replace(/\s+/g, " ").replace(/\s+([,.;!?])/g, "$1").trim();
 
+const applyFinalPunctuationReplacements = (text: string) =>
+  text
+    .replace(/“/g, "「")
+    .replace(/”/g, "」")
+    .replace(/？/g, "?")
+    .replace(/！/g, "!")
+    .replace(/：/g, ":")
+    .replace(/[，。](?=\s*$)/g, "")
+    .replace(/[，。]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
 const isLikelyBracketedSdh = (text: string) => {
   const normalized = text.replace(/[♪♫]/g, " ").replace(/[^\w\s'-]/g, " ").replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -92,8 +113,23 @@ const isLikelyBracketedSdh = (text: string) => {
   );
 };
 
-const stripBracketedSdh = (line: string, regex: RegExp) =>
-  normalizeCueText(line.replace(regex, (match) => (isLikelyBracketedSdh(match.slice(1, -1).trim()) ? " " : match)));
+const stripBracketedSdh = (line: string, regex: RegExp) => {
+  const removedTexts: string[] = [];
+  const activeRegex = new RegExp(regex.source, regex.flags);
+  const strippedLine = line.replace(activeRegex, (match) => {
+    if (isLikelyBracketedSdh(match.slice(1, -1).trim())) {
+      removedTexts.push(match.trim());
+      return " ";
+    }
+
+    return match;
+  });
+
+  return {
+    line: normalizeCueText(strippedLine),
+    removedTexts,
+  };
+};
 
 const stripSpeakerLabel = (line: string) => {
   const match = line.match(SPEAKER_LABEL_REGEX);
@@ -133,7 +169,8 @@ const isLikelyUppercaseSdhLine = (line: string) => {
 
 const stripInlineFormattingTags = (line: string) => line.replace(/<\/?[A-Za-z][^>]*>/g, " ").replace(/\{\\[^}]+\}/g, " ");
 
-const processCueLines = (textLines: string[], options: SubtitlePreprocessOptions, fileType?: SubtitleFileType) => {
+const processCueLines = (textLines: string[], options: SubtitlePreprocessOptions, cueKey: string, fileType?: SubtitleFileType) => {
+  const logs: SubtitlePreprocessLogEntry[] = [];
   const cleanedLines = textLines
     .map((line) => {
       let nextLine = line.trim();
@@ -147,15 +184,21 @@ const processCueLines = (textLines: string[], options: SubtitlePreprocessOptions
       }
 
       if (options.removeRoundBracketSdh) {
-        nextLine = stripBracketedSdh(nextLine, ROUND_BRACKET_SDH_REGEX);
+        const result = stripBracketedSdh(nextLine, ROUND_BRACKET_SDH_REGEX);
+        nextLine = result.line;
+        logs.push(...result.removedTexts.map((text) => ({ type: "round_bracket_sdh" as const, key: cueKey, text })));
       }
 
       if (options.removeSquareBracketSdh) {
-        nextLine = stripBracketedSdh(nextLine, SQUARE_BRACKET_SDH_REGEX);
+        const result = stripBracketedSdh(nextLine, SQUARE_BRACKET_SDH_REGEX);
+        nextLine = result.line;
+        logs.push(...result.removedTexts.map((text) => ({ type: "square_bracket_sdh" as const, key: cueKey, text })));
       }
 
       if (options.removeCornerBracketSdh) {
-        nextLine = stripBracketedSdh(nextLine, CORNER_BRACKET_SDH_REGEX);
+        const result = stripBracketedSdh(nextLine, CORNER_BRACKET_SDH_REGEX);
+        nextLine = result.line;
+        logs.push(...result.removedTexts.map((text) => ({ type: "corner_bracket_sdh" as const, key: cueKey, text })));
       }
 
       if (options.removeSpeakerLabels) {
@@ -165,6 +208,7 @@ const processCueLines = (textLines: string[], options: SubtitlePreprocessOptions
       nextLine = normalizeCueText(nextLine);
 
       if (options.removeUppercaseSdh && isLikelyUppercaseSdhLine(nextLine)) {
+        logs.push({ type: "uppercase_sdh", key: cueKey, text: nextLine });
         return "";
       }
 
@@ -173,19 +217,19 @@ const processCueLines = (textLines: string[], options: SubtitlePreprocessOptions
     .filter(Boolean);
 
   if (cleanedLines.length === 0) {
-    return [];
+    return { cleanedLines: [], logs };
   }
 
   if (options.mergeLinesWithinCue) {
-    const mergedLine = normalizeCueText(cleanedLines.join(" "));
-    return mergedLine ? [mergedLine] : [];
+    const mergedLine = applyFinalPunctuationReplacements(normalizeCueText(cleanedLines.join(" ")));
+    return { cleanedLines: mergedLine ? [mergedLine] : [], logs };
   }
 
-  return cleanedLines;
+  return { cleanedLines: cleanedLines.map((line) => applyFinalPunctuationReplacements(line)).filter(Boolean), logs };
 };
 
 const mergeCueTextLines = (existingLines: string[], incomingLines: string[]) => {
-  const mergedLine = normalizeCueText([...existingLines, ...incomingLines].join(" "));
+  const mergedLine = applyFinalPunctuationReplacements(normalizeCueText([...existingLines, ...incomingLines].join(" ")));
   return mergedLine ? [mergedLine] : [];
 };
 
@@ -278,6 +322,7 @@ const preprocessTimedCueBlocks = (text: string, fileType: "srt" | "vtt", options
   const parsedBlocks = parseTimedCueBlocks(text);
   const outputBlocks: Array<TimedCueBlock | RawBlock> = [];
   const mergedCueMap = new Map<string, TimedCueBlock>();
+  const logs: SubtitlePreprocessLogEntry[] = [];
   let originalCueCount = 0;
   let outputCueCount = 0;
   let removedCueCount = 0;
@@ -290,7 +335,8 @@ const preprocessTimedCueBlocks = (text: string, fileType: "srt" | "vtt", options
     }
 
     originalCueCount++;
-    const processedTextLines = processCueLines(block.textLines, options, fileType);
+    const { cleanedLines: processedTextLines, logs: cueLogs } = processCueLines(block.textLines, options, block.key, fileType);
+    logs.push(...cueLogs);
 
     if (processedTextLines.length === 0) {
       removedCueCount++;
@@ -320,6 +366,7 @@ const preprocessTimedCueBlocks = (text: string, fileType: "srt" | "vtt", options
       removedCueCount,
       mergedCueCount,
     },
+    logs,
   };
 };
 
@@ -328,6 +375,7 @@ const preprocessAssContent = (text: string, options: SubtitlePreprocessOptions) 
   const assContentStartIndex = getAssContentStartIndex(lines);
   const outputLines: Array<AssCueLine | RawLine> = [];
   const mergedCueMap = new Map<string, AssCueLine>();
+  const logs: SubtitlePreprocessLogEntry[] = [];
   let originalCueCount = 0;
   let outputCueCount = 0;
   let removedCueCount = 0;
@@ -346,6 +394,7 @@ const preprocessAssContent = (text: string, options: SubtitlePreprocessOptions) 
     }
 
     originalCueCount++;
+    const key = `${parts[1]?.trim() ?? ""} --> ${parts[2]?.trim() ?? ""}`;
     const prefix = `${parts.slice(0, assContentStartIndex).join(",")},`;
     const textLines = parts
       .slice(assContentStartIndex)
@@ -353,14 +402,14 @@ const preprocessAssContent = (text: string, options: SubtitlePreprocessOptions) 
       .trim()
       .replace(ASS_NEWLINE_REGEX, "\n")
       .split("\n");
-    const processedTextLines = processCueLines(textLines, options, "ass");
+    const { cleanedLines: processedTextLines, logs: cueLogs } = processCueLines(textLines, options, key, "ass");
+    logs.push(...cueLogs);
 
     if (processedTextLines.length === 0) {
       removedCueCount++;
       return;
     }
 
-    const key = `${parts[1]?.trim() ?? ""} --> ${parts[2]?.trim() ?? ""}`;
     if (options.mergeSameTimestamps) {
       const existingCue = mergedCueMap.get(key);
       if (existingCue) {
@@ -393,6 +442,7 @@ const preprocessAssContent = (text: string, options: SubtitlePreprocessOptions) 
       removedCueCount,
       mergedCueCount,
     },
+    logs,
   };
 };
 
@@ -400,6 +450,7 @@ const preprocessLrcContent = (text: string, options: SubtitlePreprocessOptions) 
   const lines = splitTextIntoLines(normalizeNewlines(text));
   const outputLines: Array<StructuredCue | RawLine> = [];
   const mergedCueMap = new Map<string, StructuredCue>();
+  const logs: SubtitlePreprocessLogEntry[] = [];
   let originalCueCount = 0;
   let outputCueCount = 0;
   let removedCueCount = 0;
@@ -413,14 +464,15 @@ const preprocessLrcContent = (text: string, options: SubtitlePreprocessOptions) 
     }
 
     originalCueCount++;
-    const processedTextLines = processCueLines([line.replace(LRC_TIME_TAG_REGEX, "").trim()], options, "lrc");
+    const key = timeTags.join("");
+    const { cleanedLines: processedTextLines, logs: cueLogs } = processCueLines([line.replace(LRC_TIME_TAG_REGEX, "").trim()], options, key, "lrc");
+    logs.push(...cueLogs);
 
     if (processedTextLines.length === 0) {
       removedCueCount++;
       return;
     }
 
-    const key = timeTags.join("");
     if (options.mergeSameTimestamps) {
       const existingCue = mergedCueMap.get(key);
       if (existingCue) {
@@ -457,6 +509,7 @@ const preprocessLrcContent = (text: string, options: SubtitlePreprocessOptions) 
       removedCueCount,
       mergedCueCount,
     },
+    logs,
   };
 };
 
