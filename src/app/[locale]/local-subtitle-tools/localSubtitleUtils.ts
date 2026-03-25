@@ -23,6 +23,7 @@ const ASS_DIALOGUE_REGEX = /^Dialogue:/i;
 const VTT_SRT_TIMELINE_REGEX = /^(?<start>(?:\d+:)?\d{2}:\d{2}[,.]\d{1,3})\s+-->\s+(?<end>(?:\d+:)?\d{2}:\d{2}[,.]\d{1,3})/;
 const ASS_EVENTS_HEADER = `[Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`;
+const TRAILING_DIALOGUE_PUNCTUATION_REGEX = /[!?.,;:。？！：；，]$/;
 const COMPOSE_MIN_OVERLAP_MS = 400;
 const COMPOSE_DURATION_TOLERANCE_MS = 600;
 const COMPOSE_SHORT_CUE_COVERAGE_RATIO = 0.75;
@@ -34,6 +35,7 @@ export interface SubtitlePreprocessOptions {
   removeRoundBracketSdh: boolean;
   removeSquareBracketSdh: boolean;
   removeCornerBracketSdh: boolean;
+  removeBracketedSdhWithoutKeywordCheck: boolean;
   removeInlineFormattingTags: boolean;
   removeSpeakerLabels: boolean;
   removeUppercaseSdh: boolean;
@@ -162,11 +164,11 @@ const isLikelyBracketedSdh = (text: string) => {
   );
 };
 
-const stripBracketedSdh = (line: string, regex: RegExp) => {
+const stripBracketedSdh = (line: string, regex: RegExp, skipKeywordCheck: boolean) => {
   const removedTexts: string[] = [];
   const activeRegex = new RegExp(regex.source, regex.flags);
   const strippedLine = line.replace(activeRegex, (match) => {
-    if (isLikelyBracketedSdh(match.slice(1, -1).trim())) {
+    if (skipKeywordCheck || isLikelyBracketedSdh(match.slice(1, -1).trim())) {
       removedTexts.push(match.trim());
       return " ";
     }
@@ -204,6 +206,11 @@ const isLikelyUppercaseSdhLine = (line: string) => {
     return false;
   }
 
+  // Preserve emphatic dialogue such as "GOAT!" or "RUN?", even if the text is fully uppercase.
+  if (TRAILING_DIALOGUE_PUNCTUATION_REGEX.test(line.trim())) {
+    return false;
+  }
+
   const words = normalized.split(/\s+/);
   const lettersOnly = normalized.replace(/[^A-Za-z]/g, "");
   if (lettersOnly.length < 3) {
@@ -233,19 +240,19 @@ const processCueLines = (textLines: string[], options: SubtitlePreprocessOptions
       }
 
       if (options.removeRoundBracketSdh) {
-        const result = stripBracketedSdh(nextLine, ROUND_BRACKET_SDH_REGEX);
+        const result = stripBracketedSdh(nextLine, ROUND_BRACKET_SDH_REGEX, options.removeBracketedSdhWithoutKeywordCheck);
         nextLine = result.line;
         logs.push(...result.removedTexts.map((text) => ({ type: "round_bracket_sdh" as const, key: cueKey, text })));
       }
 
       if (options.removeSquareBracketSdh) {
-        const result = stripBracketedSdh(nextLine, SQUARE_BRACKET_SDH_REGEX);
+        const result = stripBracketedSdh(nextLine, SQUARE_BRACKET_SDH_REGEX, options.removeBracketedSdhWithoutKeywordCheck);
         nextLine = result.line;
         logs.push(...result.removedTexts.map((text) => ({ type: "square_bracket_sdh" as const, key: cueKey, text })));
       }
 
       if (options.removeCornerBracketSdh) {
-        const result = stripBracketedSdh(nextLine, CORNER_BRACKET_SDH_REGEX);
+        const result = stripBracketedSdh(nextLine, CORNER_BRACKET_SDH_REGEX, options.removeBracketedSdhWithoutKeywordCheck);
         nextLine = result.line;
         logs.push(...result.removedTexts.map((text) => ({ type: "corner_bracket_sdh" as const, key: cueKey, text })));
       }

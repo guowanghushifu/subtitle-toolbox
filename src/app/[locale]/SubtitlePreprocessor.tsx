@@ -25,6 +25,8 @@ const PREPROCESSOR_TEXT = {
     optionsTitle: "预处理选项",
     bracketedSdhTitle: "括号包裹的 SDH 提示",
     bracketedSdhHint: "影视字幕里常见的包裹形式主要是圆括号、方括号和【】类方头括号，已分别拆成独立选项。",
+    removeBracketedSdhWithoutKeywordCheck: "括号匹配即移除，不判断关键词",
+    removeBracketedSdhWithoutKeywordCheckHint: "默认会结合中英日韩常见 SDH 关键词判断；勾选后只要命中括号形式就会移除，更激进。",
     removeRoundBracketSdh: "移除圆括号 SDH",
     removeRoundBracketSdhHint: "包含 () 和 （），常见于欧美、日韩字幕： (sighs)、(whispering)、（叹气）、（旁白）",
     removeSquareBracketSdh: "移除方括号 SDH",
@@ -60,6 +62,8 @@ const PREPROCESSOR_TEXT = {
     optionsTitle: "Preprocess Options",
     bracketedSdhTitle: "Bracketed SDH cues",
     bracketedSdhHint: "Common wrappers in TV and film subtitles are round brackets, square brackets, and CJK corner brackets, so these are split into separate toggles.",
+    removeBracketedSdhWithoutKeywordCheck: "Remove bracketed text without keyword checks",
+    removeBracketedSdhWithoutKeywordCheckHint: "By default bracketed text is checked against common SDH keywords. Enable this to remove any matched bracketed text more aggressively.",
     removeRoundBracketSdh: "Remove round-bracket SDH",
     removeRoundBracketSdhHint: "Includes () and （）. Common in Western and East Asian subtitles: (sighs), (whispering), （旁白）",
     removeSquareBracketSdh: "Remove square-bracket SDH",
@@ -126,6 +130,7 @@ const SubtitlePreprocessor = () => {
   const [removeRoundBracketSdh, setRemoveRoundBracketSdh] = useLocalStorage("subtitlePreprocessRemoveRoundBracketSdh", true);
   const [removeSquareBracketSdh, setRemoveSquareBracketSdh] = useLocalStorage("subtitlePreprocessRemoveSquareBracketSdh", true);
   const [removeCornerBracketSdh, setRemoveCornerBracketSdh] = useLocalStorage("subtitlePreprocessRemoveCornerBracketSdh", true);
+  const [removeBracketedSdhWithoutKeywordCheck, setRemoveBracketedSdhWithoutKeywordCheck] = useLocalStorage("subtitlePreprocessRemoveBracketedSdhWithoutKeywordCheck", false);
   const [removeInlineFormattingTags, setRemoveInlineFormattingTags] = useLocalStorage("subtitlePreprocessRemoveInlineFormattingTags", true);
   const [removeSpeakerLabels, setRemoveSpeakerLabels] = useLocalStorage("subtitlePreprocessRemoveSpeakerLabels", true);
   const [removeUppercaseSdh, setRemoveUppercaseSdh] = useLocalStorage("subtitlePreprocessRemoveUppercaseSdh", false);
@@ -172,6 +177,7 @@ const SubtitlePreprocessor = () => {
       removeRoundBracketSdh,
       removeSquareBracketSdh,
       removeCornerBracketSdh,
+      removeBracketedSdhWithoutKeywordCheck,
       removeInlineFormattingTags,
       removeSpeakerLabels,
       removeUppercaseSdh,
@@ -329,11 +335,18 @@ const SubtitlePreprocessor = () => {
               </div>
 
               <div>
-              <Checkbox checked={removeCornerBracketSdh} onChange={(e) => setRemoveCornerBracketSdh(e.target.checked)}>
-                {uiText.removeCornerBracketSdh}
-              </Checkbox>
-              <div className="pl-6 pt-1 text-xs text-gray-500">{uiText.removeCornerBracketSdhHint}</div>
-            </div>
+                <Checkbox checked={removeCornerBracketSdh} onChange={(e) => setRemoveCornerBracketSdh(e.target.checked)}>
+                  {uiText.removeCornerBracketSdh}
+                </Checkbox>
+                <div className="pl-6 pt-1 text-xs text-gray-500">{uiText.removeCornerBracketSdhHint}</div>
+              </div>
+
+              <div>
+                <Checkbox checked={removeBracketedSdhWithoutKeywordCheck} onChange={(e) => setRemoveBracketedSdhWithoutKeywordCheck(e.target.checked)}>
+                  {uiText.removeBracketedSdhWithoutKeywordCheck}
+                </Checkbox>
+                <div className="pl-6 pt-1 text-xs text-gray-500">{uiText.removeBracketedSdhWithoutKeywordCheckHint}</div>
+              </div>
 
             <div>
               <Checkbox checked={removeInlineFormattingTags} onChange={(e) => setRemoveInlineFormattingTags(e.target.checked)}>
