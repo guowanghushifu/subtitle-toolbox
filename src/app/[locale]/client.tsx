@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import dynamic from "next/dynamic";
 import { Tabs, TabsProps, Typography, Spin } from "antd";
 import { VideoCameraOutlined, QuestionCircleOutlined } from "@ant-design/icons";
@@ -28,6 +28,11 @@ const ClientPage = () => {
   const userGuideUrl = getDocUrl("guide/translation/subtitle-translator/index.html", locale);
   const preprocessTabLabel = locale.startsWith("zh") ? "预处理区" : "Preprocess";
   const bilingualTabLabel = locale.startsWith("zh") ? "双语合成" : "Bilingual";
+  const [activeKey, setActiveKey] = useState("basic");
+
+  const handleTabChange = (key: string) => {
+    setActiveKey(key);
+  };
 
   const items: TabsProps["items"] = [
     {
@@ -64,7 +69,7 @@ const ClientPage = () => {
         {tSubtitle("clientDescription")}
         {t("privacyNotice")}
       </Paragraph>
-      <Tabs defaultActiveKey="preprocess" items={items} type="card" className="w-full" animated={{ inkBar: true, tabPane: true }} />
+      <Tabs activeKey={activeKey} onChange={handleTabChange} items={items} type="card" className="w-full" animated={{ inkBar: true, tabPane: true }} />
     </TranslationProvider>
   );
 };
