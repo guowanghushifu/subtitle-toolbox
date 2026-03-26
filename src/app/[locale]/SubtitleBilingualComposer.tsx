@@ -35,7 +35,9 @@ const BILINGUAL_TEXT = {
     sdrTemplate: "SDR 模板",
     templateEditor: "ASS 模板编辑器",
     templateHint: "Chs 用于译文样式，Eng 用于原文样式，Tip 已预留。",
+    resetTemplate: "恢复初始模板",
     saveTemplate: "保存模板",
+    templateReset: "模板已恢复为初始值",
     templateSaved: "模板已保存",
     startCompose: "开始合成",
     resultTitle: "合成结果",
@@ -63,7 +65,9 @@ const BILINGUAL_TEXT = {
     sdrTemplate: "SDR Template",
     templateEditor: "ASS Template Editor",
     templateHint: "Chs is used for translated lines, Eng for original lines, and Tip is reserved.",
+    resetTemplate: "Reset Template",
     saveTemplate: "Save Template",
+    templateReset: "Template reset to default",
     templateSaved: "Template saved",
     startCompose: "Compose Subtitle",
     resultTitle: "Composed Result",
@@ -228,6 +232,17 @@ const SubtitleBilingualComposer = () => {
     message.success(uiText.templateSaved);
   };
 
+  const handleResetTemplate = () => {
+    if (assTemplateMode === "hdr") {
+      setHdrTemplateDraft(bilingualAssHdrTemplate);
+      setSavedHdrTemplate(bilingualAssHdrTemplate);
+    } else {
+      setSdrTemplateDraft(bilingualAssSdrTemplate);
+      setSavedSdrTemplate(bilingualAssSdrTemplate);
+    }
+    message.success(uiText.templateReset);
+  };
+
   const handleCompose = () => {
     if (!originalUpload.sourceText.trim() || !translatedUpload.sourceText.trim()) {
       message.error(uiText.noSourceText);
@@ -326,9 +341,14 @@ const SubtitleBilingualComposer = () => {
                         <Text strong>{uiText.templateEditor}</Text>
                         <div className="text-xs text-gray-500">{uiText.templateHint}</div>
                       </div>
-                      <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveTemplate}>
-                        {uiText.saveTemplate}
-                      </Button>
+                      <Space>
+                        <Button icon={<SyncOutlined />} onClick={handleResetTemplate}>
+                          {uiText.resetTemplate}
+                        </Button>
+                        <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveTemplate}>
+                          {uiText.saveTemplate}
+                        </Button>
+                      </Space>
                     </Flex>
 
                     <TextArea
