@@ -26,10 +26,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`
 const TRAILING_DIALOGUE_PUNCTUATION_REGEX = /[!?.,;:。？！：；，]$/;
 const ELLIPSIS_REGEX_SOURCE = String.raw`(?:\.{3,}|…{1,}|⋯{1,})`;
 const COMMA_PAUSE_REGEX_SOURCE = String.raw`(?:,|，)`;
-const CHINESE_HESITATION_FILLERS = ["呃", "嗯", "啊", "哎", "这", "那", "那个", "这个", "就是", "我是说", "怎么说", "那么", "那麼", "好吧", "那什么", "那个什么"] as const;
-const CHINESE_COMMA_HESITATION_FILLERS = ["呃", "嗯", "啊", "哎"] as const;
-const ENGLISH_HESITATION_FILLERS = ["uh", "um", "er", "ah", "well", "so", "like", "hmm", "mm", "mmm", "i mean", "you know", "you see"] as const;
-const ENGLISH_COMMA_HESITATION_FILLERS = ["uh", "um", "er", "ah", "hmm", "mm", "mmm"] as const;
+const CHINESE_HESITATION_FILLERS = ["额", "呃", "嗯", "啊", "哎", "这", "那", "那个", "这个", "就是", "我是说", "怎么说", "那么", "那麼", "好吧", "那什么", "那个什么"] as const;
+const CHINESE_COMMA_HESITATION_FILLERS = ["额", "呃", "嗯", "啊", "哎"] as const;
+const ENGLISH_HESITATION_FILLERS = ["erm", "hm", "uh", "um", "er", "ah", "well", "so", "like", "hmm", "mm", "mmm", "i mean", "you know", "you see"] as const;
+const ENGLISH_COMMA_HESITATION_FILLERS = ["erm", "hm", "uh", "um", "er", "ah", "hmm", "mm", "mmm"] as const;
 const COMPOSE_MIN_OVERLAP_MS = 400;
 const COMPOSE_DURATION_TOLERANCE_MS = 600;
 const COMPOSE_SHORT_CUE_COVERAGE_RATIO = 0.75;
