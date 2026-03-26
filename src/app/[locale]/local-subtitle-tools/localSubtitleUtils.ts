@@ -25,8 +25,11 @@ const ASS_EVENTS_HEADER = `[Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`;
 const TRAILING_DIALOGUE_PUNCTUATION_REGEX = /[!?.,;:。？！：；，]$/;
 const ELLIPSIS_REGEX_SOURCE = String.raw`(?:\.{3,}|…{1,}|⋯{1,})`;
+const COMMA_PAUSE_REGEX_SOURCE = String.raw`(?:,|，)`;
 const CHINESE_HESITATION_FILLERS = ["呃", "嗯", "啊", "哎", "这", "那", "那个", "这个", "就是", "我是说", "怎么说", "那么", "那麼", "好吧", "那什么", "那个什么"] as const;
-const ENGLISH_HESITATION_FILLERS = ["uh", "um", "er", "ah", "well", "so", "like", "hmm", "mm", "mmm", "i mean", "you know", "you see", "it's"] as const;
+const CHINESE_COMMA_HESITATION_FILLERS = ["呃", "嗯", "啊", "哎"] as const;
+const ENGLISH_HESITATION_FILLERS = ["uh", "um", "er", "ah", "well", "so", "like", "hmm", "mm", "mmm", "i mean", "you know", "you see"] as const;
+const ENGLISH_COMMA_HESITATION_FILLERS = ["uh", "um", "er", "ah", "hmm", "mm", "mmm"] as const;
 const COMPOSE_MIN_OVERLAP_MS = 400;
 const COMPOSE_DURATION_TOLERANCE_MS = 600;
 const COMPOSE_SHORT_CUE_COVERAGE_RATIO = 0.75;
@@ -153,11 +156,11 @@ const applyRepeatedEllipsisCleanup = (text: string) => {
   return nextText;
 };
 
-const applyFillerEllipsisCleanup = (text: string, fillers: readonly string[], flags: string, removeFiller: boolean) =>
+const applyFillerPauseCleanup = (text: string, fillers: readonly string[], flags: string, removeFiller: boolean, pauseRegexSource: string) =>
   fillers.reduce(
     (currentText, filler) =>
       currentText.replace(
-        new RegExp(`(^|[\\s"'“”‘’「」『』()（）\\-—])(${escapeRegex(filler)})\\s*${ELLIPSIS_REGEX_SOURCE}(?=$|[\\s"'“”‘’「」『』()（）,.!?;:，。？！：；\\-—])`, flags),
+        new RegExp(`(^|[\\s"'“”‘’「」『』()（）\\-—])(${escapeRegex(filler)})\\s*${pauseRegexSource}(?=$|[\\s"'“”‘’「」『』()（）,.!?;:，。？！：；\\-—])`, flags),
         removeFiller ? "$1" : "$1$2",
       ),
     text,
@@ -165,11 +168,24 @@ const applyFillerEllipsisCleanup = (text: string, fillers: readonly string[], fl
 
 const applyHesitationEllipsisCleanup = (text: string) =>
   normalizeCueText(
-    applyFillerEllipsisCleanup(
-      applyFillerEllipsisCleanup(applyRepeatedEllipsisCleanup(text), CHINESE_HESITATION_FILLERS, "g", true),
-      ENGLISH_HESITATION_FILLERS,
+    applyFillerPauseCleanup(
+      applyFillerPauseCleanup(
+        applyFillerPauseCleanup(
+          applyFillerPauseCleanup(applyRepeatedEllipsisCleanup(text), CHINESE_HESITATION_FILLERS, "g", true, ELLIPSIS_REGEX_SOURCE),
+          ENGLISH_HESITATION_FILLERS,
+          "gi",
+          true,
+          ELLIPSIS_REGEX_SOURCE,
+        ),
+        CHINESE_COMMA_HESITATION_FILLERS,
+        "g",
+        true,
+        COMMA_PAUSE_REGEX_SOURCE,
+      ),
+      ENGLISH_COMMA_HESITATION_FILLERS,
       "gi",
       true,
+      COMMA_PAUSE_REGEX_SOURCE,
     ),
   );
 
