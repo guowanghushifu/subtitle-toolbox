@@ -24,6 +24,8 @@ const VTT_SRT_TIMELINE_REGEX = /^((?:\d+:)?\d{2}:\d{2}[,.]\d{1,3})\s+-->\s+((?:\
 const ASS_EVENTS_HEADER = `[Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`;
 const TRAILING_DIALOGUE_PUNCTUATION_REGEX = /[!?.,;:。？！：；，]$/;
+const STANDALONE_DIALOGUE_MARKER_REGEX = /^[-–—]+$/;
+const STANDALONE_MUSIC_NOTE_REGEX = /^[♪♫♬♩♭♯\s]+$/;
 const ELLIPSIS_REGEX_SOURCE = String.raw`(?:\.{3,}|…{1,}|⋯{1,})`;
 const COMMA_PAUSE_REGEX_SOURCE = String.raw`(?:,|，)`;
 const CHINESE_HESITATION_FILLERS = ["额", "呃", "嗯", "啊", "哎", "这", "那", "那个", "这个", "就是", "我是说", "怎么说", "那么", "那麼", "好吧", "那什么", "那个什么"] as const;
@@ -259,6 +261,10 @@ const stripSpeakerLabel = (line: string) => {
 };
 
 const isLikelyUppercaseSdhLine = (line: string) => {
+  if (STANDALONE_MUSIC_NOTE_REGEX.test(line.trim())) {
+    return true;
+  }
+
   const normalized = line.replace(/[♪♫]/g, " ").replace(/[^\w\s'-]/g, " ").replace(/\s+/g, " ").trim();
   if (!normalized || CJK_TEXT_REGEX.test(line)) {
     return false;
@@ -282,6 +288,8 @@ const isLikelyUppercaseSdhLine = (line: string) => {
 };
 
 const stripInlineFormattingTags = (line: string) => line.replace(/<\/?[A-Za-z][^>]*>/g, " ").replace(/\{\\[^}]+\}/g, " ");
+
+const removeStandaloneDialogueMarker = (line: string) => (STANDALONE_DIALOGUE_MARKER_REGEX.test(line.trim()) ? "" : line);
 
 const processCueLines = (textLines: string[], options: SubtitlePreprocessOptions, cueKey: string, fileType?: SubtitleFileType) => {
   const logs: SubtitlePreprocessLogEntry[] = [];
@@ -330,7 +338,7 @@ const processCueLines = (textLines: string[], options: SubtitlePreprocessOptions
         nextLine = applyHesitationEllipsisCleanup(nextLine);
       }
 
-      return nextLine;
+      return removeStandaloneDialogueMarker(nextLine);
     })
     .filter(Boolean);
 
