@@ -21,7 +21,7 @@ const PREPROCESSOR_TEXT = {
   zh: {
     tabLabel: "预处理区",
     title: "字幕预处理",
-    description: "先清理 SDH 提示，再按选项合并字幕内容。处理完成后可以直接送到翻译区，或先保存到本地。",
+    description: "先清理 SDH 提示，再按选项合并字幕内容。处理完成后可以保存到本地。",
     optionsTitle: "预处理选项",
     bracketedSdhTitle: "括号包裹的 SDH 提示",
     bracketedSdhHint: "影视字幕里常见的包裹形式主要是圆括号、方括号和【】类方头括号，已分别拆成独立选项。",
@@ -33,6 +33,8 @@ const PREPROCESSOR_TEXT = {
     removeSquareBracketSdhHint: "包含 [] 和 ［］，常见于平台字幕： [MUSIC]、[door opens]、[笑]、[拍手]",
     removeCornerBracketSdh: "移除【】类 SDH",
     removeCornerBracketSdhHint: "常见于中文、日系熟肉或电视字幕： 【脚步声】、【旁白】、【电话铃声】",
+    removeHesitationEllipses: "清理中英文犹豫省略号",
+    removeHesitationEllipsesHint: "仅处理 SRT/VTT。会清理常见台词里的重复词口吃和犹豫词后的省略号，例如 我……我、I... I、呃……、Uh...",
     removeInlineFormattingTags: "移除内联格式标记",
     removeInlineFormattingTagsHint: "用于清理 SRT/VTT 中的 <i>、<b>、<u>、<font> 以及 {\\an8} 这类内联样式标记",
     removeSpeakerLabels: "移除说话人标签",
@@ -58,7 +60,7 @@ const PREPROCESSOR_TEXT = {
   en: {
     tabLabel: "Preprocess",
     title: "Subtitle Preprocess",
-    description: "Clean SDH cues before translation, then merge subtitle content based on your options. You can save the result locally or send it straight to the translation tab.",
+    description: "Clean SDH cues before translation, then merge subtitle content based on your options. You can save the result locally after processing.",
     optionsTitle: "Preprocess Options",
     bracketedSdhTitle: "Bracketed SDH cues",
     bracketedSdhHint: "Common wrappers in TV and film subtitles are round brackets, square brackets, and CJK corner brackets, so these are split into separate toggles.",
@@ -70,6 +72,8 @@ const PREPROCESSOR_TEXT = {
     removeSquareBracketSdhHint: "Includes [] and ［］. Common in streaming/platform captions: [MUSIC], [door opens], [笑]",
     removeCornerBracketSdh: "Remove 【】 SDH",
     removeCornerBracketSdhHint: "Common in Chinese and Japanese fan/TV subtitles: 【脚步声】, 【旁白】, 【电话铃声】",
+    removeHesitationEllipses: "Clean hesitation ellipses",
+    removeHesitationEllipsesHint: "Only affects SRT/VTT. Cleans repeated-word stammers and ellipses after common hesitation fillers, such as 我……我, I... I, 呃……, and Uh...",
     removeInlineFormattingTags: "Remove inline formatting tags",
     removeInlineFormattingTagsHint: "Cleans SRT/VTT tags such as <i>, <b>, <u>, <font>, and inline markers like {\\an8}",
     removeSpeakerLabels: "Remove speaker labels",
@@ -130,10 +134,11 @@ const SubtitlePreprocessor = () => {
   const [removeRoundBracketSdh, setRemoveRoundBracketSdh] = useLocalStorage("subtitlePreprocessRemoveRoundBracketSdh", true);
   const [removeSquareBracketSdh, setRemoveSquareBracketSdh] = useLocalStorage("subtitlePreprocessRemoveSquareBracketSdh", true);
   const [removeCornerBracketSdh, setRemoveCornerBracketSdh] = useLocalStorage("subtitlePreprocessRemoveCornerBracketSdh", true);
-  const [removeBracketedSdhWithoutKeywordCheck, setRemoveBracketedSdhWithoutKeywordCheck] = useLocalStorage("subtitlePreprocessRemoveBracketedSdhWithoutKeywordCheck", false);
+  const [removeBracketedSdhWithoutKeywordCheck, setRemoveBracketedSdhWithoutKeywordCheck] = useLocalStorage("subtitlePreprocessRemoveBracketedSdhWithoutKeywordCheck", true);
+  const [removeHesitationEllipses, setRemoveHesitationEllipses] = useLocalStorage("subtitlePreprocessRemoveHesitationEllipses", true);
   const [removeInlineFormattingTags, setRemoveInlineFormattingTags] = useLocalStorage("subtitlePreprocessRemoveInlineFormattingTags", true);
   const [removeSpeakerLabels, setRemoveSpeakerLabels] = useLocalStorage("subtitlePreprocessRemoveSpeakerLabels", true);
-  const [removeUppercaseSdh, setRemoveUppercaseSdh] = useLocalStorage("subtitlePreprocessRemoveUppercaseSdh", false);
+  const [removeUppercaseSdh, setRemoveUppercaseSdh] = useLocalStorage("subtitlePreprocessRemoveUppercaseSdh", true);
   const [mergeSameTimestamps, setMergeSameTimestamps] = useLocalStorage("subtitlePreprocessMergeSameTimestamps", true);
   const [mergeLinesWithinCue, setMergeLinesWithinCue] = useLocalStorage("subtitlePreprocessMergeLinesWithinCue", true);
 
@@ -178,6 +183,7 @@ const SubtitlePreprocessor = () => {
       removeSquareBracketSdh,
       removeCornerBracketSdh,
       removeBracketedSdhWithoutKeywordCheck,
+      removeHesitationEllipses,
       removeInlineFormattingTags,
       removeSpeakerLabels,
       removeUppercaseSdh,
@@ -346,6 +352,13 @@ const SubtitlePreprocessor = () => {
                   {uiText.removeBracketedSdhWithoutKeywordCheck}
                 </Checkbox>
                 <div className="pl-6 pt-1 text-xs text-gray-500">{uiText.removeBracketedSdhWithoutKeywordCheckHint}</div>
+              </div>
+
+              <div>
+                <Checkbox checked={removeHesitationEllipses} onChange={(e) => setRemoveHesitationEllipses(e.target.checked)}>
+                  {uiText.removeHesitationEllipses}
+                </Checkbox>
+                <div className="pl-6 pt-1 text-xs text-gray-500">{uiText.removeHesitationEllipsesHint}</div>
               </div>
 
             <div>

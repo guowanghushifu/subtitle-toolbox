@@ -24,6 +24,9 @@ const VTT_SRT_TIMELINE_REGEX = /^((?:\d+:)?\d{2}:\d{2}[,.]\d{1,3})\s+-->\s+((?:\
 const ASS_EVENTS_HEADER = `[Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`;
 const TRAILING_DIALOGUE_PUNCTUATION_REGEX = /[!?.,;:。？！：；，]$/;
+const ELLIPSIS_REGEX_SOURCE = String.raw`(?:\.{3,}|…{1,}|⋯{1,})`;
+const CHINESE_HESITATION_FILLERS = ["呃", "嗯", "啊", "哎", "这", "那", "那个", "这个", "就是", "我是说", "怎么说", "那么", "那麼", "好吧", "那什么", "那个什么"] as const;
+const ENGLISH_HESITATION_FILLERS = ["uh", "um", "er", "ah", "well", "so", "like", "hmm", "mm", "mmm", "i mean", "you know", "you see", "it's"] as const;
 const COMPOSE_MIN_OVERLAP_MS = 400;
 const COMPOSE_DURATION_TOLERANCE_MS = 600;
 const COMPOSE_SHORT_CUE_COVERAGE_RATIO = 0.75;
@@ -36,6 +39,7 @@ export interface SubtitlePreprocessOptions {
   removeSquareBracketSdh: boolean;
   removeCornerBracketSdh: boolean;
   removeBracketedSdhWithoutKeywordCheck: boolean;
+  removeHesitationEllipses: boolean;
   removeInlineFormattingTags: boolean;
   removeSpeakerLabels: boolean;
   removeUppercaseSdh: boolean;
@@ -132,8 +136,46 @@ export interface BilingualComposeResult {
 
 const normalizeCueText = (text: string) => text.replace(/\s+/g, " ").replace(/\s+([,.;!?])/g, "$1").trim();
 
+const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const applyRepeatedEllipsisCleanup = (text: string) => {
+  let nextText = text;
+  for (let i = 0; i < 4; i++) {
+    const previousText = nextText;
+    nextText = nextText
+      .replace(new RegExp(`([\\u3400-\\u9fff]{1,4})\\s*${ELLIPSIS_REGEX_SOURCE}\\s*\\1`, "g"), "$1")
+      .replace(new RegExp(`\\b([A-Za-z]+(?:'[A-Za-z]+)?)\\b\\s*${ELLIPSIS_REGEX_SOURCE}\\s*\\1\\b`, "gi"), "$1");
+
+    if (nextText === previousText) {
+      break;
+    }
+  }
+  return nextText;
+};
+
+const applyFillerEllipsisCleanup = (text: string, fillers: readonly string[], flags: string, removeFiller: boolean) =>
+  fillers.reduce(
+    (currentText, filler) =>
+      currentText.replace(
+        new RegExp(`(^|[\\s"'“”‘’「」『』()（）\\-—])(${escapeRegex(filler)})\\s*${ELLIPSIS_REGEX_SOURCE}(?=$|[\\s"'“”‘’「」『』()（）,.!?;:，。？！：；\\-—])`, flags),
+        removeFiller ? "$1" : "$1$2",
+      ),
+    text,
+  );
+
+const applyHesitationEllipsisCleanup = (text: string) =>
+  normalizeCueText(
+    applyFillerEllipsisCleanup(
+      applyFillerEllipsisCleanup(applyRepeatedEllipsisCleanup(text), CHINESE_HESITATION_FILLERS, "g", true),
+      ENGLISH_HESITATION_FILLERS,
+      "gi",
+      true,
+    ),
+  );
+
 const applyFinalPunctuationReplacements = (text: string) =>
   text
+    .replace(/……/g, "…")
     .replace(/“/g, "「")
     .replace(/”/g, "」")
     .replace(/？/g, "?")
@@ -266,6 +308,10 @@ const processCueLines = (textLines: string[], options: SubtitlePreprocessOptions
       if (options.removeUppercaseSdh && isLikelyUppercaseSdhLine(nextLine)) {
         logs.push({ type: "uppercase_sdh", key: cueKey, text: nextLine });
         return "";
+      }
+
+      if (options.removeHesitationEllipses && (fileType === "srt" || fileType === "vtt")) {
+        nextLine = applyHesitationEllipsisCleanup(nextLine);
       }
 
       return nextLine;
