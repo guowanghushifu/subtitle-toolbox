@@ -288,7 +288,7 @@ const SubtitlePreprocessor = () => {
                   }
                 : undefined
             }
-            rows={10}
+            rows={20}
             className="mt-4"
             allowClear
             readOnly={!sourceStats.isEditable}
