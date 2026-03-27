@@ -23,8 +23,6 @@ const PREPROCESSOR_TEXT = {
     title: "字幕预处理",
     description: "先清理 SDH 提示，再按选项合并字幕内容。处理完成后可以保存到本地。",
     optionsTitle: "预处理选项",
-    bracketedSdhTitle: "括号包裹的 SDH 提示",
-    bracketedSdhHint: "影视字幕里常见的包裹形式主要是圆括号、方括号和【】类方头括号，已分别拆成独立选项。",
     removeBracketedSdhWithoutKeywordCheck: "括号匹配即移除，不判断关键词",
     removeBracketedSdhWithoutKeywordCheckHint: "默认会结合中英日韩常见 SDH 关键词判断；勾选后只要命中括号形式就会移除，更激进。",
     removeRoundBracketSdh: "移除圆括号 SDH",
@@ -56,14 +54,16 @@ const PREPROCESSOR_TEXT = {
     squareBracketLog: "方括号 SDH",
     cornerBracketLog: "【】类 SDH",
     uppercaseLog: "全大写音效提示",
+    buildInfoTitle: "版本信息",
+    versionLabel: "版本",
+    buildTimeLabel: "构建时间",
+    unknownBuildTime: "未知",
   },
   en: {
     tabLabel: "Preprocess",
     title: "Subtitle Preprocess",
     description: "Clean SDH cues before translation, then merge subtitle content based on your options. You can save the result locally after processing.",
     optionsTitle: "Preprocess Options",
-    bracketedSdhTitle: "Bracketed SDH cues",
-    bracketedSdhHint: "Common wrappers in TV and film subtitles are round brackets, square brackets, and CJK corner brackets, so these are split into separate toggles.",
     removeBracketedSdhWithoutKeywordCheck: "Remove bracketed text without keyword checks",
     removeBracketedSdhWithoutKeywordCheckHint: "By default bracketed text is checked against common SDH keywords. Enable this to remove any matched bracketed text more aggressively.",
     removeRoundBracketSdh: "Remove round-bracket SDH",
@@ -95,6 +95,10 @@ const PREPROCESSOR_TEXT = {
     squareBracketLog: "Square-bracket SDH",
     cornerBracketLog: "【】 SDH",
     uppercaseLog: "Uppercase sound cue",
+    buildInfoTitle: "Build Info",
+    versionLabel: "Version",
+    buildTimeLabel: "Build Time",
+    unknownBuildTime: "Unknown",
   },
 } as const;
 
@@ -111,6 +115,28 @@ const SubtitlePreprocessor = () => {
   const { message } = App.useApp();
   const { copyToClipboard } = useCopyToClipboard();
   const uiText = useMemo(() => (locale.startsWith("zh") ? PREPROCESSOR_TEXT.zh : PREPROCESSOR_TEXT.en), [locale]);
+  const appVersion = process.env.NEXT_PUBLIC_APP_VERSION ?? "unknown";
+  const buildTime = process.env.NEXT_PUBLIC_BUILD_TIME;
+  const formattedBuildTime = useMemo(() => {
+    if (!buildTime) {
+      return uiText.unknownBuildTime;
+    }
+
+    const parsedTime = new Date(buildTime);
+    if (Number.isNaN(parsedTime.getTime())) {
+      return buildTime;
+    }
+
+    return parsedTime.toLocaleString(locale, {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+  }, [buildTime, locale, uiText.unknownBuildTime]);
   const {
     isFileProcessing,
     fileList,
@@ -322,11 +348,6 @@ const SubtitlePreprocessor = () => {
           {isHydrated ? (
             <Flex vertical gap="middle">
               <div>
-                <Text strong>{uiText.bracketedSdhTitle}</Text>
-                <div className="pt-1 text-xs text-gray-500">{uiText.bracketedSdhHint}</div>
-              </div>
-
-              <div>
                 <Checkbox checked={removeRoundBracketSdh} onChange={(e) => setRemoveRoundBracketSdh(e.target.checked)}>
                   {uiText.removeRoundBracketSdh}
                 </Checkbox>
@@ -396,6 +417,18 @@ const SubtitlePreprocessor = () => {
                   {uiText.mergeLinesWithinCue}
                 </Checkbox>
                 <div className="pl-6 pt-1 text-xs text-gray-500">{uiText.mergeLinesWithinCueHint}</div>
+              </div>
+
+              <Divider className="!my-1" />
+
+              <div className="text-xs text-gray-500">
+                <div className="font-medium text-gray-700">{uiText.buildInfoTitle}</div>
+                <div className="pt-1">
+                  {uiText.versionLabel}: {appVersion}
+                </div>
+                <div>
+                  {uiText.buildTimeLabel}: {formattedBuildTime}
+                </div>
               </div>
             </Flex>
           ) : (
