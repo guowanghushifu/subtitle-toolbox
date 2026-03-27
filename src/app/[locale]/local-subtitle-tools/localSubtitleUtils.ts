@@ -201,6 +201,7 @@ const applyFinalPunctuationReplacements = (text: string) =>
     .replace(/：/g, ":")
     .replace(/[，。](?=\s*$)/g, "")
     .replace(/[，。]/g, " ")
+    .replace(/\s+([」』】）])/g, "$1")
     .replace(/\s+/g, " ")
     .trim();
 
