@@ -15,7 +15,7 @@ const CJK_TEXT_REGEX = /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/;
 const ROUND_BRACKET_SDH_REGEX = /(\([^()]+\)|（[^（）]+）)/g;
 const SQUARE_BRACKET_SDH_REGEX = /(\[[^[\]]+\]|［[^［］]+］)/g;
 const CORNER_BRACKET_SDH_REGEX = /(【[^【】]+】)/g;
-const SPEAKER_LABEL_REGEX = /^\s*[-–—]?\s*([A-Z][A-Z0-9'".-]*(?:\s+[A-Z][A-Z0-9'".-]*){0,5}|[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,4})\s*:\s*(.+)$/;
+const SPEAKER_LABEL_REGEX = /^\s*[-–—]?\s*([A-Z][A-Z0-9'".-]*(?:\s+[A-Z][A-Z0-9'".-]*){0,5}|[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,4})\s*:\s*(.*)$/;
 const TIME_REGEX = /^(?:(\d+):)?(\d{2}):(\d{2})[,.](\d{1,3})$/;
 const ASS_ALL_TAGS_REGEX = /\{[^}]*\}/g;
 const ASS_NEWLINE_REGEX = /\\[Nn]/g;
@@ -52,7 +52,7 @@ export interface SubtitlePreprocessOptions {
   mergeLinesWithinCue: boolean;
 }
 
-export type SubtitlePreprocessLogType = "round_bracket_sdh" | "square_bracket_sdh" | "corner_bracket_sdh" | "uppercase_sdh";
+export type SubtitlePreprocessLogType = "round_bracket_sdh" | "square_bracket_sdh" | "corner_bracket_sdh" | "uppercase_sdh" | "speaker_label";
 
 export interface SubtitlePreprocessLogEntry {
   type: SubtitlePreprocessLogType;
@@ -246,7 +246,10 @@ const stripBracketedSdh = (line: string, regex: RegExp, skipKeywordCheck: boolea
 const stripSpeakerLabel = (line: string) => {
   const match = line.match(SPEAKER_LABEL_REGEX);
   if (!match) {
-    return line.trim();
+    return {
+      line: line.trim(),
+      removedLabel: "",
+    };
   }
 
   const [, speaker, content] = match;
@@ -255,10 +258,16 @@ const stripSpeakerLabel = (line: string) => {
   const isTitleCaseSpeaker = words.every((word) => /^[A-Z][a-z'".-]*$/.test(word));
 
   if (!isAllUppercaseSpeaker && !isTitleCaseSpeaker) {
-    return line.trim();
+    return {
+      line: line.trim(),
+      removedLabel: "",
+    };
   }
 
-  return normalizeCueText(content);
+  return {
+    line: normalizeCueText(content),
+    removedLabel: `${speaker.trim()}:`,
+  };
 };
 
 const isLikelyUppercaseSdhLine = (line: string) => {
@@ -325,7 +334,11 @@ const processCueLines = (textLines: string[], options: SubtitlePreprocessOptions
       }
 
       if (options.removeSpeakerLabels) {
-        nextLine = stripSpeakerLabel(nextLine);
+        const result = stripSpeakerLabel(nextLine);
+        nextLine = result.line;
+        if (result.removedLabel) {
+          logs.push({ type: "speaker_label", key: cueKey, text: result.removedLabel });
+        }
       }
 
       nextLine = normalizeCueText(nextLine);

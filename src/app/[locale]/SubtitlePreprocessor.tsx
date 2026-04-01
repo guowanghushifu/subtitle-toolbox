@@ -54,6 +54,7 @@ const PREPROCESSOR_TEXT = {
     squareBracketLog: "方括号 SDH",
     cornerBracketLog: "【】类 SDH",
     uppercaseLog: "全大写音效提示",
+    speakerLabelLog: "说话人标签",
     buildInfoTitle: "版本信息",
     versionLabel: "版本",
     buildTimeLabel: "构建时间",
@@ -95,6 +96,7 @@ const PREPROCESSOR_TEXT = {
     squareBracketLog: "Square-bracket SDH",
     cornerBracketLog: "【】 SDH",
     uppercaseLog: "Uppercase sound cue",
+    speakerLabelLog: "Speaker label",
     buildInfoTitle: "Build Info",
     versionLabel: "Version",
     buildTimeLabel: "Build Time",
@@ -182,7 +184,9 @@ const SubtitlePreprocessor = () => {
                   ? uiText.squareBracketLog
                   : log.type === "corner_bracket_sdh"
                     ? uiText.cornerBracketLog
-                    : uiText.uppercaseLog;
+                    : log.type === "speaker_label"
+                      ? uiText.speakerLabelLog
+                      : uiText.uppercaseLog;
             return `[${label}] ${log.key} ${log.text}`.trim();
           })
           .join("\n");
