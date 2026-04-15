@@ -36,6 +36,7 @@ const COMPOSE_MIN_OVERLAP_MS = 400;
 const COMPOSE_DURATION_TOLERANCE_MS = 600;
 const COMPOSE_SHORT_CUE_COVERAGE_RATIO = 0.75;
 const COMPOSE_LONG_CUE_COVERAGE_RATIO = 0.6;
+const COMPOSE_SHORT_CUE_ALIGNMENT_TOLERANCE_MS = 50;
 
 export type SubtitleFileType = "ass" | "vtt" | "srt" | "lrc";
 
@@ -807,6 +808,9 @@ const calculateOverlapMs = (first: TimelineCue, second: TimelineCue) => Math.max
 const getCueDurationMs = (cue: TimelineCue) => cue.endMs - cue.startMs;
 const areIndicesConsecutive = (indices: number[]) => indices.every((value, index) => index === 0 || value === indices[index - 1] + 1);
 const calculateCoverageRatio = (baseDurationMs: number, coveredDurationMs: number) => (baseDurationMs <= 0 ? 0 : coveredDurationMs / baseDurationMs);
+const hasNearlyIdenticalTiming = (first: TimelineCue, second: TimelineCue) =>
+  Math.abs(first.startMs - second.startMs) <= COMPOSE_SHORT_CUE_ALIGNMENT_TOLERANCE_MS &&
+  Math.abs(first.endMs - second.endMs) <= COMPOSE_SHORT_CUE_ALIGNMENT_TOLERANCE_MS;
 
 const calculateCoveredDurationWithinCue = (baseCue: TimelineCue, candidateCues: TimelineCue[]) => {
   const overlapSegments = candidateCues
@@ -997,7 +1001,7 @@ export const composeBilingualSubtitle = (originalText: string, translatedText: s
       }
 
       const overlap = calculateOverlapMs(originalCue, translatedCue);
-      if (overlap < threshold) {
+      if (overlap < threshold && !hasNearlyIdenticalTiming(originalCue, translatedCue)) {
         return;
       }
 
