@@ -23,9 +23,15 @@ const ASS_DIALOGUE_REGEX = /^Dialogue:/i;
 const VTT_SRT_TIMELINE_REGEX = /^((?:\d+:)?\d{2}:\d{2}[,.]\d{1,3})\s+-->\s+((?:\d+:)?\d{2}:\d{2}[,.]\d{1,3})/;
 const ASS_EVENTS_HEADER = `[Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`;
-const TRAILING_DIALOGUE_PUNCTUATION_REGEX = /[!?.,;:。？！：；，]$/;
 const STANDALONE_DIALOGUE_MARKER_REGEX = /^[-–—]+$/;
 const STANDALONE_MUSIC_NOTE_REGEX = /^[♪♫♬♩♭♯\s]+$/;
+const REPEATED_QUOTE_MARK_PAIRS: Record<string, string> = {
+  "'": "'",
+  '"': '"',
+  "‘": "’",
+  "“": "”",
+};
+const DROPPED_LEADING_APOSTROPHE_REGEX = /^(?:\d|cause\b|til\b|em\b|bout\b|round\b|twas\b|tis\b)/i;
 const ELLIPSIS_REGEX_SOURCE = String.raw`(?:\.{3,}|…{1,}|⋯{1,})`;
 const COMMA_PAUSE_REGEX_SOURCE = String.raw`(?:,|，)`;
 const CHINESE_HESITATION_FILLERS = ["额", "呃", "嗯", "啊", "哎", "这", "那", "那个", "这个", "就是", "我是说", "怎么说", "那么", "那麼", "好吧", "那什么", "那个什么"] as const;
@@ -49,6 +55,7 @@ export interface SubtitlePreprocessOptions {
   removeInlineFormattingTags: boolean;
   removeSpeakerLabels: boolean;
   removeUppercaseSdh: boolean;
+  removeRepeatedQuoteMarks: boolean;
   mergeSameTimestamps: boolean;
   mergeLinesWithinCue: boolean;
 }
@@ -281,11 +288,6 @@ const isLikelyUppercaseSdhLine = (line: string) => {
     return false;
   }
 
-  // Preserve emphatic dialogue such as "GOAT!" or "RUN?", even if the text is fully uppercase.
-  if (TRAILING_DIALOGUE_PUNCTUATION_REGEX.test(line.trim())) {
-    return false;
-  }
-
   const words = normalized.split(/\s+/);
   const lettersOnly = normalized.replace(/[^A-Za-z]/g, "");
   if (lettersOnly.length < 3) {
@@ -374,6 +376,112 @@ const mergeCueTextLines = (existingLines: string[], incomingLines: string[]) => 
   return mergedLine ? [mergedLine] : [];
 };
 
+const getFirstTextLineIndex = (lines: string[]) => lines.findIndex((line) => line.trim());
+
+const getLastTextLineIndex = (lines: string[]) => {
+  for (let index = lines.length - 1; index >= 0; index--) {
+    if (lines[index].trim()) {
+      return index;
+    }
+  }
+
+  return -1;
+};
+
+const getOpeningQuoteMark = (lines: string[]) => {
+  const firstTextLineIndex = getFirstTextLineIndex(lines);
+  if (firstTextLineIndex === -1) {
+    return "";
+  }
+
+  const trimmedLine = lines[firstTextLineIndex].trimStart();
+  const openingQuote = trimmedLine[0] ?? "";
+  if (openingQuote === "'" && DROPPED_LEADING_APOSTROPHE_REGEX.test(trimmedLine.slice(1))) {
+    return "";
+  }
+
+  return REPEATED_QUOTE_MARK_PAIRS[openingQuote] ? openingQuote : "";
+};
+
+const removeOpeningQuoteMark = (lines: string[], quoteMark: string) => {
+  const firstTextLineIndex = getFirstTextLineIndex(lines);
+  if (firstTextLineIndex === -1) {
+    return lines;
+  }
+
+  const line = lines[firstTextLineIndex];
+  const leadingWhitespace = line.match(/^\s*/)?.[0] ?? "";
+  const content = line.slice(leadingWhitespace.length);
+  if (!content.startsWith(quoteMark)) {
+    return lines;
+  }
+
+  const nextLines = [...lines];
+  nextLines[firstTextLineIndex] = `${leadingWhitespace}${content.slice(quoteMark.length)}`;
+  return nextLines;
+};
+
+const removeClosingQuoteMark = (lines: string[], quoteMark: string) => {
+  const closingQuoteMark = REPEATED_QUOTE_MARK_PAIRS[quoteMark];
+  const lastTextLineIndex = getLastTextLineIndex(lines);
+  if (!closingQuoteMark || lastTextLineIndex === -1) {
+    return lines;
+  }
+
+  const line = lines[lastTextLineIndex];
+  const trimmedLine = line.trimEnd();
+  if (!trimmedLine.endsWith(closingQuoteMark)) {
+    return lines;
+  }
+
+  const trailingWhitespace = line.slice(trimmedLine.length);
+  const nextLines = [...lines];
+  nextLines[lastTextLineIndex] = `${trimmedLine.slice(0, -closingQuoteMark.length)}${trailingWhitespace}`;
+  return nextLines;
+};
+
+const removeRepeatedQuoteMarksFromCueRun = (cueRun: TimedCueBlock[], quoteMark: string) => {
+  if (cueRun.length < 2) {
+    return;
+  }
+
+  cueRun.forEach((cue) => {
+    cue.textLines = removeClosingQuoteMark(removeOpeningQuoteMark(cue.textLines, quoteMark), quoteMark);
+  });
+};
+
+const removeRepeatedQuoteMarksFromBlocks = (blocks: Array<TimedCueBlock | RawBlock>) => {
+  let cueRun: TimedCueBlock[] = [];
+  let quoteMark = "";
+
+  const flushCueRun = () => {
+    removeRepeatedQuoteMarksFromCueRun(cueRun, quoteMark);
+    cueRun = [];
+    quoteMark = "";
+  };
+
+  blocks.forEach((block) => {
+    if (block.type === "raw") {
+      flushCueRun();
+      return;
+    }
+
+    const nextQuoteMark = getOpeningQuoteMark(block.textLines);
+    if (!nextQuoteMark || (quoteMark && nextQuoteMark !== quoteMark)) {
+      flushCueRun();
+    }
+
+    if (!nextQuoteMark) {
+      return;
+    }
+
+    quoteMark = nextQuoteMark;
+    cueRun.push(block);
+  });
+
+  flushCueRun();
+};
+
 const parseTimedCueBlocks = (text: string) => {
   const lines = splitTextIntoLines(normalizeNewlines(text));
   const blocks: string[][] = [];
@@ -435,6 +543,10 @@ const rebuildTimedCueBlocks = (blocks: Array<TimedCueBlock | RawBlock>, fileType
 
 const preprocessTimedCueBlocks = (text: string, fileType: "srt" | "vtt", options: SubtitlePreprocessOptions) => {
   const parsedBlocks = parseTimedCueBlocks(text);
+  if (options.removeRepeatedQuoteMarks) {
+    removeRepeatedQuoteMarksFromBlocks(parsedBlocks);
+  }
+
   const outputBlocks: Array<TimedCueBlock | RawBlock> = [];
   const mergedCueMap = new Map<string, TimedCueBlock>();
   const logs: SubtitlePreprocessLogEntry[] = [];

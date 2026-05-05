@@ -39,6 +39,8 @@ const PREPROCESSOR_TEXT = {
     removeSpeakerLabelsHint: "例如 SOME ONE SAY: hello、JOHN: hello",
     removeUppercaseSdh: "移除全大写音效提示",
     removeUppercaseSdhHint: "例如 MUSIC、DOOR OPENS、LOUD BREATHING",
+    removeRepeatedQuoteMarks: "移除跨字幕块重复引号",
+    removeRepeatedQuoteMarksHint: "仅处理 SRT/VTT。连续多个字幕块都以同一种外层引号开头时，移除重复开头引号和对应结尾引号；不会处理 You're、'90s、'cause。",
     mergeSameTimestamps: "合并相同时间戳的字幕",
     mergeSameTimestampsHint: "同一时间范围出现多条字幕时，用空格合并成一条",
     mergeLinesWithinCue: "合并同一字幕块内多行",
@@ -81,6 +83,8 @@ const PREPROCESSOR_TEXT = {
     removeSpeakerLabelsHint: "Examples: SOME ONE SAY: hello, JOHN: hello",
     removeUppercaseSdh: "Remove uppercase sound cues",
     removeUppercaseSdhHint: "Examples: MUSIC, DOOR OPENS, LOUD BREATHING",
+    removeRepeatedQuoteMarks: "Remove repeated quote marks across cues",
+    removeRepeatedQuoteMarksHint: "Only affects SRT/VTT. When consecutive cues start with the same outer quote mark, removes the repeated opening marks and matching closing marks; keeps You're, '90s, and 'cause.",
     mergeSameTimestamps: "Merge subtitles with identical timestamps",
     mergeSameTimestampsHint: "Combine subtitles in the same time range into one line with spaces",
     mergeLinesWithinCue: "Merge multi-line subtitles inside one cue",
@@ -167,6 +171,7 @@ const SubtitlePreprocessor = () => {
   const [removeInlineFormattingTags, setRemoveInlineFormattingTags] = useLocalStorage("subtitlePreprocessRemoveInlineFormattingTags", true);
   const [removeSpeakerLabels, setRemoveSpeakerLabels] = useLocalStorage("subtitlePreprocessRemoveSpeakerLabels", true);
   const [removeUppercaseSdh, setRemoveUppercaseSdh] = useLocalStorage("subtitlePreprocessRemoveUppercaseSdh", true);
+  const [removeRepeatedQuoteMarks, setRemoveRepeatedQuoteMarks] = useLocalStorage("subtitlePreprocessRemoveRepeatedQuoteMarks", true);
   const [mergeSameTimestamps, setMergeSameTimestamps] = useLocalStorage("subtitlePreprocessMergeSameTimestamps", true);
   const [mergeLinesWithinCue, setMergeLinesWithinCue] = useLocalStorage("subtitlePreprocessMergeLinesWithinCue", true);
 
@@ -217,6 +222,7 @@ const SubtitlePreprocessor = () => {
       removeInlineFormattingTags,
       removeSpeakerLabels,
       removeUppercaseSdh,
+      removeRepeatedQuoteMarks,
       mergeSameTimestamps,
       mergeLinesWithinCue,
     });
@@ -405,6 +411,13 @@ const SubtitlePreprocessor = () => {
                   {uiText.removeUppercaseSdh}
                 </Checkbox>
                 <div className="pl-6 pt-1 text-xs text-gray-500">{uiText.removeUppercaseSdhHint}</div>
+              </div>
+
+              <div>
+                <Checkbox checked={removeRepeatedQuoteMarks} onChange={(e) => setRemoveRepeatedQuoteMarks(e.target.checked)}>
+                  {uiText.removeRepeatedQuoteMarks}
+                </Checkbox>
+                <div className="pl-6 pt-1 text-xs text-gray-500">{uiText.removeRepeatedQuoteMarksHint}</div>
               </div>
 
               <Divider className="!my-1" />
