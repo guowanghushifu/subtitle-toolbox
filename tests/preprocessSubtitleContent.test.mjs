@@ -135,6 +135,24 @@ Illumination!`,
   );
 });
 
+test("preprocessSubtitleContent removes music-note SDH lines with dialogue markers", () => {
+  const input = `1
+00:05:28,021 --> 00:05:31,121
+- (hissing)
+- ♪ ♪
+`;
+
+  const result = preprocessSubtitleContent(input, defaultOptions);
+
+  assert.ok(result, "expected preprocess result");
+  assert.equal(result.content, "");
+  assert.equal(result.stats.removedCueCount, 1);
+  assert.deepEqual(
+    result.logs.map((log) => log.text),
+    ["(hissing)", "- ♪ ♪"],
+  );
+});
+
 test("preprocessSubtitleContent removes repeated outer quotes across consecutive cues", () => {
   const input = `1
 00:00:04,000 --> 00:00:07,599

@@ -25,7 +25,7 @@ const VTT_SRT_TIMELINE_REGEX = /^((?:\d+:)?\d{2}:\d{2}[,.]\d{1,3})\s+-->\s+((?:\
 const ASS_EVENTS_HEADER = `[Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`;
 const STANDALONE_DIALOGUE_MARKER_REGEX = /^[-–—]+$/;
-const STANDALONE_MUSIC_NOTE_REGEX = /^[♪♫♬♩♭♯\s]+$/;
+const STANDALONE_MUSIC_NOTE_REGEX = /^\s*[-–—]?\s*[♪♫♬♩♭♯][♪♫♬♩♭♯\s]*$/;
 const REPEATED_QUOTE_MARK_PAIRS: Record<string, string> = {
   "'": "'",
   '"': '"',
