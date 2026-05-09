@@ -15,6 +15,7 @@ const CJK_TEXT_REGEX = /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/;
 const ROUND_BRACKET_SDH_REGEX = /(\([^()]+\)|（[^（）]+）)/g;
 const SQUARE_BRACKET_SDH_REGEX = /(\[[^[\]]+\]|［[^［］]+］)/g;
 const CORNER_BRACKET_SDH_REGEX = /(【[^【】]+】)/g;
+const ORPHANED_SPEAKER_SEPARATOR_REGEX = /^[:：]\s*/;
 const SPEAKER_LABEL_REGEX = /^\s*[-–—]?\s*([A-Z][A-Z0-9'".-]*(?:\s+[A-Z][A-Z0-9'".-]*){0,5}|[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,4})\s*:\s*(.*)$/;
 const TIME_REGEX = /^(?:(\d+):)?(\d{2}):(\d{2})[,.](\d{1,3})$/;
 const ASS_ALL_TAGS_REGEX = /\{[^}]*\}/g;
@@ -251,6 +252,34 @@ const stripBracketedSdh = (line: string, regex: RegExp, skipKeywordCheck: boolea
   };
 };
 
+const stripOrphanedSpeakerSeparatorAfterSdh = (line: string, removedTexts: string[]) =>
+  removedTexts.length > 0 ? line.replace(ORPHANED_SPEAKER_SEPARATOR_REGEX, "").trim() : line;
+
+const stripConfiguredBracketedSdh = (line: string, options: SubtitlePreprocessOptions, cueKey: string) => {
+  const logs: SubtitlePreprocessLogEntry[] = [];
+  let nextLine = line;
+
+  if (options.removeRoundBracketSdh) {
+    const result = stripBracketedSdh(nextLine, ROUND_BRACKET_SDH_REGEX, options.removeBracketedSdhWithoutKeywordCheck);
+    nextLine = stripOrphanedSpeakerSeparatorAfterSdh(result.line, result.removedTexts);
+    logs.push(...result.removedTexts.map((text) => ({ type: "round_bracket_sdh" as const, key: cueKey, text })));
+  }
+
+  if (options.removeSquareBracketSdh) {
+    const result = stripBracketedSdh(nextLine, SQUARE_BRACKET_SDH_REGEX, options.removeBracketedSdhWithoutKeywordCheck);
+    nextLine = stripOrphanedSpeakerSeparatorAfterSdh(result.line, result.removedTexts);
+    logs.push(...result.removedTexts.map((text) => ({ type: "square_bracket_sdh" as const, key: cueKey, text })));
+  }
+
+  if (options.removeCornerBracketSdh) {
+    const result = stripBracketedSdh(nextLine, CORNER_BRACKET_SDH_REGEX, options.removeBracketedSdhWithoutKeywordCheck);
+    nextLine = stripOrphanedSpeakerSeparatorAfterSdh(result.line, result.removedTexts);
+    logs.push(...result.removedTexts.map((text) => ({ type: "corner_bracket_sdh" as const, key: cueKey, text })));
+  }
+
+  return { line: nextLine, logs };
+};
+
 const stripSpeakerLabel = (line: string) => {
   const match = line.match(SPEAKER_LABEL_REGEX);
   if (!match) {
@@ -318,23 +347,9 @@ const processCueLines = (textLines: string[], options: SubtitlePreprocessOptions
         nextLine = stripInlineFormattingTags(nextLine);
       }
 
-      if (options.removeRoundBracketSdh) {
-        const result = stripBracketedSdh(nextLine, ROUND_BRACKET_SDH_REGEX, options.removeBracketedSdhWithoutKeywordCheck);
-        nextLine = result.line;
-        logs.push(...result.removedTexts.map((text) => ({ type: "round_bracket_sdh" as const, key: cueKey, text })));
-      }
-
-      if (options.removeSquareBracketSdh) {
-        const result = stripBracketedSdh(nextLine, SQUARE_BRACKET_SDH_REGEX, options.removeBracketedSdhWithoutKeywordCheck);
-        nextLine = result.line;
-        logs.push(...result.removedTexts.map((text) => ({ type: "square_bracket_sdh" as const, key: cueKey, text })));
-      }
-
-      if (options.removeCornerBracketSdh) {
-        const result = stripBracketedSdh(nextLine, CORNER_BRACKET_SDH_REGEX, options.removeBracketedSdhWithoutKeywordCheck);
-        nextLine = result.line;
-        logs.push(...result.removedTexts.map((text) => ({ type: "corner_bracket_sdh" as const, key: cueKey, text })));
-      }
+      const bracketedSdhResult = stripConfiguredBracketedSdh(nextLine, options, cueKey);
+      nextLine = bracketedSdhResult.line;
+      logs.push(...bracketedSdhResult.logs);
 
       if (options.removeSpeakerLabels) {
         const result = stripSpeakerLabel(nextLine);
@@ -364,7 +379,9 @@ const processCueLines = (textLines: string[], options: SubtitlePreprocessOptions
   }
 
   if (options.mergeLinesWithinCue) {
-    const mergedLine = applyFinalPunctuationReplacements(normalizeCueText(cleanedLines.join(" ")));
+    const mergedSdhResult = stripConfiguredBracketedSdh(normalizeCueText(cleanedLines.join(" ")), options, cueKey);
+    logs.push(...mergedSdhResult.logs);
+    const mergedLine = applyFinalPunctuationReplacements(mergedSdhResult.line);
     return { cleanedLines: mergedLine ? [mergedLine] : [], logs };
   }
 

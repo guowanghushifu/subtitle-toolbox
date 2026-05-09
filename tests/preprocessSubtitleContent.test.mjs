@@ -94,6 +94,47 @@ RUN?
   );
 });
 
+test("preprocessSubtitleContent removes round-bracket SDH split across cue lines", () => {
+  const input = `1
+00:00:01,398 --> 00:00:05,334
+(grand orchestral fanfare
+playing)
+`;
+
+  const result = preprocessSubtitleContent(input, defaultOptions);
+
+  assert.ok(result, "expected preprocess result");
+  assert.equal(result.content, "");
+  assert.equal(result.stats.removedCueCount, 1);
+  assert.deepEqual(
+    result.logs.map((log) => log.text),
+    ["(grand orchestral fanfare playing)"],
+  );
+});
+
+test("preprocessSubtitleContent removes speaker-label colon left after bracketed SDH", () => {
+  const input = `1
+00:00:31,560 --> 00:00:33,693
+(muffled):
+Illumination!
+`;
+
+  const result = preprocessSubtitleContent(input, defaultOptions);
+
+  assert.ok(result, "expected preprocess result");
+  assert.equal(
+    result.content,
+    `1
+00:00:31,560 --> 00:00:33,693
+Illumination!`,
+  );
+  assert.equal(result.stats.removedCueCount, 0);
+  assert.deepEqual(
+    result.logs.map((log) => log.text),
+    ["(muffled)"],
+  );
+});
+
 test("preprocessSubtitleContent removes repeated outer quotes across consecutive cues", () => {
   const input = `1
 00:00:04,000 --> 00:00:07,599
