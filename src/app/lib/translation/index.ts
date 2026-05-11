@@ -10,11 +10,14 @@ import { cleanTranslatedText } from "./utils";
 
 // Re-export everything for backwards compatibility
 export * from "./types";
+export * from "./registry";
 export * from "./config";
 export * from "./cache";
 export * from "./languages-data";
 export * from "./utils";
 export { translationServices } from "./services";
+export { translategemmaHealthCheck } from "./services/traditional";
+export { completeOpenAICompatUrl } from "./services/shared";
 
 /**
  * Test translation with a given method and config
@@ -55,6 +58,9 @@ export const testTranslation = async (translationMethod: TranslationMethod, conf
   }
 };
 
+// Skip translation if text has no translatable characters
+const HAS_TRANSLATABLE_CONTENT = /[a-zA-Z\p{L}]/u;
+
 /**
  * Translate text using the specified method
  * Throws on error to allow retry logic to work properly
@@ -62,8 +68,7 @@ export const testTranslation = async (translationMethod: TranslationMethod, conf
 const translateText = async (params: TranslateTextParams): Promise<string> => {
   const { text, cacheSuffix, translationMethod, targetLanguage, sourceLanguage, useCache = true } = params;
 
-  // Skip translation if no translatable content
-  if (!/[a-zA-Z\p{L}]/u.test(text) || sourceLanguage === targetLanguage) {
+  if (!HAS_TRANSLATABLE_CONTENT.test(text) || sourceLanguage === targetLanguage) {
     return text;
   }
 
@@ -88,7 +93,9 @@ const translateText = async (params: TranslateTextParams): Promise<string> => {
 
   // Clean and cache result
   const cleanedText = cleanTranslatedText(translatedText);
-  await setCachedTranslation(cacheKey, cleanedText);
+  if (useCache) {
+    await setCachedTranslation(cacheKey, cleanedText);
+  }
 
   return cleanedText;
 };
@@ -96,12 +103,6 @@ const translateText = async (params: TranslateTextParams): Promise<string> => {
 /**
  * React hook for translation
  */
-export const useTranslation = () => {
-  const translate = async (params: TranslateTextParams) => {
-    return await translateText(params);
-  };
-
-  return {
-    translate,
-  };
-};
+export const useTranslation = () => ({
+  translate: translateText,
+});

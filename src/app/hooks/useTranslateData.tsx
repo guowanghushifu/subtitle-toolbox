@@ -1,9 +1,12 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState } from "react";
 import { App } from "antd";
 import { useLocalStorage } from "@/app/hooks/useLocalStorage";
 import useFileUpload from "@/app/hooks/useFileUpload";
+import { useLlmPresets } from "@/app/hooks/useLlmPresets";
+import { usePromptPresets } from "@/app/hooks/usePromptPresets";
+import { useTranslationProgress } from "@/app/hooks/useTranslationProgress";
 import {
   generateCacheSuffix,
   checkLanguageSupport,
@@ -11,10 +14,15 @@ import {
   testTranslation,
   useTranslation,
   defaultConfigs,
-  isConfigStructureValid,
+  getDefaultConfig,
+  getThinkingModelPattern,
+  migrateConfig,
+  resetConfigWithCredentials,
   LLM_MODELS,
+  URL_IS_PRIMARY_CRED,
   DEFAULT_SYS_PROMPT,
   DEFAULT_USER_PROMPT,
+  translategemmaHealthCheck,
   type TranslateTextParams,
   type TranslationConfig,
 } from "@/app/lib/translation";
@@ -36,17 +44,9 @@ import pRetry from "p-retry";
 import { useTranslations } from "next-intl";
 
 const DEFAULT_API = "gtxFreeAPI";
-const MAX_CONTEXT_PADDING = 25;
+const MAX_CONTEXT_PADDING = 50;
 
 type TranslationConfigs = Record<string, TranslationConfig>;
-
-type LlmPreset = {
-  id: string;
-  name: string;
-  config: TranslationConfig;
-  sysPrompt?: string;
-  userPrompt?: string;
-};
 
 type PerformTranslation = (sourceText: string, fileNameSet?: string, fileIndex?: number, totalFiles?: number, documentType?: "subtitle" | "markdown" | "generic") => Promise<void>;
 
@@ -68,7 +68,7 @@ const useTranslateData = () => {
   // State
   const [useCache, setUseCache] = useState<boolean>(true);
   const [translationMethod, setTranslationMethod] = useLocalStorage<string>("translationMethod", DEFAULT_API);
-  const [translationConfigs, setTranslationConfigs] = useLocalStorage<TranslationConfigs>("translationConfigs", defaultConfigs as unknown as TranslationConfigs);
+  const [translationConfigs, setTranslationConfigs] = useLocalStorage<TranslationConfigs>("translationConfigs", defaultConfigs as TranslationConfigs);
   const [sysPrompt, setSysPrompt] = useLocalStorage<string>("sysPrompt", DEFAULT_SYS_PROMPT);
   const [userPrompt, setUserPrompt] = useLocalStorage<string>("userPrompt", DEFAULT_USER_PROMPT);
   const [sourceLanguage, setSourceLanguage] = useLocalStorage<string>("sourceLanguage", "auto");
@@ -78,18 +78,42 @@ const useTranslateData = () => {
   const [multiLanguageMode, setMultiLanguageMode] = useLocalStorage<boolean>("multiLanguageMode", false);
   const [retryCount, setRetryCount] = useLocalStorage<number>("translationRetryCount", DEFAULT_RETRY_COUNT);
   const [retryTimeout, setRetryTimeout] = useLocalStorage<number>("translationRetryTimeout", DEFAULT_RETRY_TIMEOUT);
-  const [llmPresets, setLlmPresets] = useLocalStorage<LlmPreset[]>("llmPresets", []);
-  const [activePresetId, setActivePresetId] = useLocalStorage<string>("activePresetId", "");
   const [translatedText, setTranslatedText] = useState<string>("");
   const [extractedText, setExtractedText] = useState<string>("");
-  const [translateInProgress, setTranslateInProgress] = useState(false);
-  const [progressPercent, setProgressPercent] = useState(0);
-
-  // Shared abort controller for all translation operations
-  const abortControllerRef = useRef<AbortController | null>(null);
+  // Soft-failure telemetry: count and original text of lines that failed
+  // even after the 10s auto-retry pass. UI uses these to show an Alert
+  // with a retry button; re-clicking Translate hits the IndexedDB cache
+  // for successful lines, only re-requesting the failed ones.
+  const [translateFailedCount, setTranslateFailedCount] = useState<number>(0);
+  const [translateFailedLines, setTranslateFailedLines] = useState<string[]>([]);
 
   const effectiveSysPrompt = sysPrompt.trim() ? sysPrompt : DEFAULT_SYS_PROMPT;
   const effectiveUserPrompt = userPrompt.trim() ? userPrompt : DEFAULT_USER_PROMPT;
+
+  // Extracted concerns
+  const { translateInProgress, setTranslateInProgress, progressPercent, setProgressPercent, progressInfo, abortControllerRef, makeUpdateProgress, resetProgress } = useTranslationProgress();
+
+  const { llmPresets, setLlmPresets, activePresetId, saveLlmPreset, loadLlmPreset, deleteLlmPreset, renameLlmPreset, updateLlmPreset } = useLlmPresets({
+    translationConfigs,
+    setTranslationConfigs,
+  });
+
+  const {
+    promptPresets,
+    setPromptPresets,
+    activePromptPresetId,
+    setActivePromptPresetId,
+    savePromptPreset,
+    loadPromptPreset,
+    deletePromptPreset,
+    renamePromptPreset,
+    updatePromptPreset,
+  } = usePromptPresets({
+    effectiveSysPrompt,
+    effectiveUserPrompt,
+    setSysPrompt,
+    setUserPrompt,
+  });
 
   // Settings export/import
   const exportSettings = async () => {
@@ -104,6 +128,8 @@ const useTranslateData = () => {
         target_langs,
         multiLanguageMode,
         llmPresets,
+        promptPresets,
+        activePromptPresetId,
       });
       message.success(t("exportSettingSuccess"));
     } catch (error) {
@@ -123,6 +149,8 @@ const useTranslateData = () => {
       if (settings.target_langs !== undefined) setTarget_langs(settings.target_langs);
       if (settings.multiLanguageMode !== undefined) setMultiLanguageMode(settings.multiLanguageMode);
       if (settings.llmPresets !== undefined) setLlmPresets(settings.llmPresets);
+      if (settings.promptPresets !== undefined) setPromptPresets(settings.promptPresets);
+      if (settings.activePromptPresetId !== undefined) setActivePromptPresetId(settings.activePromptPresetId);
       message.success(t("importSettingSuccess"));
     }, readFile).catch((error) => {
       console.error("Import settings error:", error);
@@ -134,111 +162,49 @@ const useTranslateData = () => {
   const handleConfigChange = (method: string, field: string, value: string | number | boolean) => {
     setTranslationConfigs((prev) => {
       const currentConfig = prev[method];
-      const defaultConfig = (defaultConfigs as unknown as TranslationConfigs)[method];
+      const defaultConfig = getDefaultConfig(method);
 
-      // If the config does not exist or structure is invalid, use the defaultConfig as base
-      // but preserve any existing apiKey if present
-      let baseConfig = currentConfig;
-      if (!currentConfig || !isConfigStructureValid(currentConfig as Record<string, unknown>, defaultConfig as Record<string, unknown>)) {
-        baseConfig = {
-          ...defaultConfig,
-          ...(currentConfig && (currentConfig as any).apiKey ? { apiKey: (currentConfig as any).apiKey } : {}),
-        };
+      const baseConfig = migrateConfig(currentConfig, defaultConfig);
+      const next = { ...baseConfig, [field]: value } as TranslationConfig;
+
+      // When the model field changes on a service with model-conditional thinking
+      // (e.g. DeepSeek: only deepseek-v4-pro supports thinking), strip stale
+      // enableThinking + reasoningEffort so they don't ghost-activate after
+      // switching back later.
+      if (field === "model") {
+        const pattern = getThinkingModelPattern(method);
+        if (pattern && !pattern.test(String(value))) {
+          if (next.enableThinking !== undefined) delete next.enableThinking;
+          if (next.reasoningEffort !== undefined) delete next.reasoningEffort;
+        }
       }
 
-      return {
-        ...prev,
-        [method]: { ...baseConfig, [field]: value } as TranslationConfig,
-      };
+      return { ...prev, [method]: next };
     });
   };
 
   const resetTranslationConfig = (key: string) => {
-    setTranslationConfigs((prevConfigs) => {
-      const oldConfig = prevConfigs[key] || {};
-      const defaultConfig = (defaultConfigs as unknown as TranslationConfigs)[key];
-      return {
-        ...prevConfigs,
-        [key]: {
-          ...defaultConfig,
-          ...(oldConfig.apiKey !== undefined ? { apiKey: oldConfig.apiKey } : {}),
-        },
-      };
-    });
-  };
-
-  const saveLlmPreset = (name: string) => {
-    // Always save the llm config specifically, not whatever getCurrentConfig returns
-    const llmConfig = translationConfigs["llm"];
-    const defaultConfig = (defaultConfigs as unknown as TranslationConfigs)["llm"];
-    const config = llmConfig || defaultConfig;
-    const preset: LlmPreset = {
-      id: String(Date.now()),
-      name,
-      config: { ...config },
-      sysPrompt: effectiveSysPrompt,
-      userPrompt: effectiveUserPrompt,
-    };
-    setLlmPresets((prev) => [...prev, preset]);
-    setActivePresetId(preset.id);
-    return preset;
-  };
-
-  const loadLlmPreset = (id: string) => {
-    if (!id) {
-      setActivePresetId("");
-      return;
-    }
-    const preset = llmPresets.find((p) => p.id === id);
-    if (!preset) return;
-    setTranslationConfigs((prev) => ({
-      ...prev,
-      llm: { ...preset.config },
+    setTranslationConfigs((prevConfigs) => ({
+      ...prevConfigs,
+      [key]: resetConfigWithCredentials(prevConfigs[key], getDefaultConfig(key)),
     }));
-    if (preset.sysPrompt !== undefined) setSysPrompt(preset.sysPrompt);
-    if (preset.userPrompt !== undefined) setUserPrompt(preset.userPrompt);
-    setActivePresetId(id);
-  };
-
-  const deleteLlmPreset = (id: string) => {
-    setLlmPresets((prev) => prev.filter((p) => p.id !== id));
-    if (activePresetId === id) setActivePresetId("");
-  };
-
-  const renameLlmPreset = (id: string, name: string) => {
-    setLlmPresets((prev) => prev.map((p) => (p.id === id ? { ...p, name } : p)));
-  };
-
-  const updateLlmPreset = (id: string) => {
-    const llmConfig = translationConfigs["llm"];
-    const defaultConfig = (defaultConfigs as unknown as TranslationConfigs)["llm"];
-    const config = llmConfig || defaultConfig;
-    setLlmPresets((prev) => prev.map((p) => (p.id === id ? { ...p, config: { ...config }, sysPrompt: effectiveSysPrompt, userPrompt: effectiveUserPrompt } : p)));
   };
 
   // Pure function: Returns valid config without calling setState during render
   const getCurrentConfig = (): TranslationConfig => {
     // If selected translationMethod doesn't exist in defaults (e.g. stale key in localStorage like "aliyun" -> "qwenMt")
     let effectiveMethod = translationMethod;
-    if (!(defaultConfigs as unknown as TranslationConfigs)[effectiveMethod]) {
+    if (!getDefaultConfig(effectiveMethod)) {
       effectiveMethod = DEFAULT_API;
     }
 
     const currentConfig = translationConfigs[effectiveMethod];
-    const defaultConfig = (defaultConfigs as unknown as TranslationConfigs)[effectiveMethod];
+    const defaultConfig = getDefaultConfig(effectiveMethod);
 
-    // If no config found in localStorage, or structure is invalid (missing fields due to update)
-    // We do NOT call setTranslationConfigs here (which causes setState in render errors).
-    // Instead, we just return a merged config on the fly.
-    // It will be fixed in localStorage next time they intentionally change a setting or reset.
-    if (!currentConfig || !isConfigStructureValid(currentConfig as Record<string, unknown>, defaultConfig as Record<string, unknown>)) {
-      return {
-        ...defaultConfig,
-        ...(currentConfig && (currentConfig as any).apiKey ? { apiKey: (currentConfig as any).apiKey } : {}),
-      };
-    }
-
-    return currentConfig;
+    // Merge defaults in without resetting user choices. migrateConfig is idempotent
+    // and side-effect free — safe to call during render. localStorage gets
+    // written back next time the user changes a setting.
+    return migrateConfig(currentConfig, defaultConfig);
   };
 
   // Language management
@@ -249,7 +215,7 @@ const useTranslateData = () => {
         const newTargetValue = value === "zh" ? "en" : "zh";
         setSourceLanguage(value);
         setTargetLanguage(newTargetValue);
-        message.error(`${t("sameLanguageTarget")} ${newTargetValue === "zh" ? tLanguages("chinese") : tLanguages("english")}`);
+        message.error(`${t("sameLanguageTarget")} ${newTargetValue === "zh" ? tLanguages("zh") : tLanguages("en")}`);
       } else {
         setTargetLanguage(value);
         setSourceLanguage("auto");
@@ -264,16 +230,28 @@ const useTranslateData = () => {
     }
   };
 
+  // Swap source <-> target. Bypasses handleLanguageChange's same-language
+  // guard because a swap never lands on a same-language state. Disabled by
+  // the UI when sourceLanguage === "auto" (can't move "detect" to target) or
+  // multiLanguageMode === true (no single target to swap against).
+  const handleSwapLanguages = () => {
+    const previousSource = sourceLanguage;
+    setSourceLanguage(targetLanguage);
+    setTargetLanguage(previousSource);
+  };
+
   // Validation
   const validateTranslate = async () => {
     const config = getCurrentConfig();
-    if (config && "apiKey" in config && !config.apiKey && translationMethod !== "llm") {
+    // URL_IS_PRIMARY_CRED services treat URL as the credential — apiKey can be
+    // empty (local LM Studio / llama.cpp typically don't require a key).
+    if (config && "apiKey" in config && !config.apiKey && !URL_IS_PRIMARY_CRED.has(translationMethod)) {
       message.error(t("enterApiKey"));
       return false;
     }
 
-    if (translationMethod === "llm" && !config.url) {
-      message.error(t("enterLlmUrl"));
+    if (URL_IS_PRIMARY_CRED.has(translationMethod) && !(config.url as string | undefined)?.trim()) {
+      message.error(t("enterApiUrl"));
       return false;
     }
 
@@ -281,7 +259,10 @@ const useTranslateData = () => {
       const result = checkLanguageSupport(translationMethod, sourceLanguage, targetLanguage);
       if (!result.supported) {
         if (result.errorMessage) message.error({ content: result.errorMessage, duration: 10 });
-        setTranslationMethod(DEFAULT_API);
+        // preserveMethod=true means the user just needs to fix their input
+        // (e.g. pick an explicit source language) — keep their chosen method
+        // instead of silently falling back to GTX.
+        if (!result.preserveMethod) setTranslationMethod(DEFAULT_API);
         return false;
       }
     } else {
@@ -289,38 +270,37 @@ const useTranslateData = () => {
         const result = checkLanguageSupport(translationMethod, sourceLanguage, lang);
         if (!result.supported) {
           if (result.errorMessage) message.error({ content: result.errorMessage, duration: 10 });
-          setTranslationMethod(DEFAULT_API);
+          if (!result.preserveMethod) setTranslationMethod(DEFAULT_API);
           return false;
         }
       }
     }
 
-    if (["deepl", "deeplx", "llm", "gtxFreeAPI"].includes(translationMethod)) {
+    if (["deepl", "deeplx", "llm", "gtxFreeAPI", "translategemma"].includes(translationMethod)) {
       setTranslateInProgress(true);
       setProgressPercent(1);
-      const tempSysPrompt = translationMethod === "llm" ? effectiveSysPrompt : undefined;
-      const tempUserPrompt = translationMethod === "llm" ? effectiveUserPrompt : undefined;
-      const testResult = await testTranslation(translationMethod, config, tempSysPrompt, tempUserPrompt);
+      // translategemma uses a lightweight reachability check (GET /v1/models)
+      // instead of full inference — avoids the 5-30s wait for cold-start model
+      // loading on LM Studio. Catches the common "server not running" case fast.
+      let testResult: boolean;
+      if (translationMethod === "translategemma") {
+        testResult = await translategemmaHealthCheck(config.url as string);
+      } else {
+        const tempSysPrompt = translationMethod === "llm" ? effectiveSysPrompt : undefined;
+        const tempUserPrompt = translationMethod === "llm" ? effectiveUserPrompt : undefined;
+        testResult = await testTranslation(translationMethod, config, tempSysPrompt, tempUserPrompt);
+      }
       if (testResult !== true) {
-        let errorMessage;
-        switch (translationMethod) {
-          case "deeplx":
-            errorMessage = t("deepLXUnavailable");
-            setTranslationMethod(DEFAULT_API);
-            break;
-          case "deepl":
-            errorMessage = t("deeplUnavailable");
-            break;
-          case "llm":
-            errorMessage = t("llmUnavailable");
-            break;
-          case "gtxFreeAPI":
-            errorMessage = "GTX Free 接口当前不可用，请检查您的网络连接。The free Google Translate API (GTX) is currently unavailable. Please check your network connection.";
-            break;
-          default:
-            errorMessage = t("translationError");
-        }
-        message.open({ type: "error", content: errorMessage, duration: 10 });
+        const errorMessages: Record<string, string> = {
+          deeplx: t("deepLXUnavailable"),
+          deepl: t("deeplUnavailable"),
+          llm: t("llmUnavailable"),
+          gtxFreeAPI: "GTX Free 接口当前不可用，请检查您的网络连接。The free Google Translate API (GTX) is currently unavailable. Please check your network connection.",
+          translategemma:
+            "TranslateGemma 节点不可用，请确认本地服务器（LM Studio / llama.cpp / Ollama）已启动且 URL 正确。/ TranslateGemma node unavailable. Please verify the local server (LM Studio / llama.cpp / Ollama) is running and the URL is correct.",
+        };
+        if (translationMethod === "deeplx") setTranslationMethod(DEFAULT_API);
+        message.open({ type: "error", content: errorMessages[translationMethod] || t("translationError"), duration: 10 });
         setTranslateInProgress(false);
         return false;
       }
@@ -361,26 +341,25 @@ const useTranslateData = () => {
       };
     };
 
+    // Build translate params - pick defined optional fields from config
+    const optionalFields = ["useCache", "apiKey", "region", "url", "model", "apiVersion", "temperature", "sysPrompt", "userPrompt", "sendSystemPrompt", "useRelay", "enableThinking", "reasoningEffort", "domains"] as const;
+    const extras: Record<string, unknown> = {};
+    const configRecord = config as unknown as Record<string, unknown>;
+    for (const key of optionalFields) {
+      if (configRecord[key] !== undefined) {
+        extras[key] = configRecord[key];
+      }
+    }
+    if (fullText !== undefined) extras.fullText = fullText;
+
     const translateParams: TranslateTextParams = {
       text,
       cacheSuffix,
       translationMethod: config.translationMethod,
       targetLanguage: config.targetLanguage,
       sourceLanguage: config.sourceLanguage,
-      ...(config.useCache !== undefined ? { useCache: config.useCache } : {}),
-      ...(config.apiKey !== undefined ? { apiKey: config.apiKey } : {}),
-      ...(config.region !== undefined ? { region: config.region } : {}),
-      ...(config.url !== undefined ? { url: config.url } : {}),
-      ...(config.model !== undefined ? { model: config.model } : {}),
-      ...(config.apiVersion !== undefined ? { apiVersion: config.apiVersion } : {}),
-      ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
-      ...(config.sysPrompt !== undefined ? { sysPrompt: config.sysPrompt } : {}),
-      ...(config.userPrompt !== undefined ? { userPrompt: config.userPrompt } : {}),
-      ...(config.translationMethod === "deepseek" && config.useRelay !== undefined ? { useRelay: config.useRelay } : {}),
-      ...(config.translationMethod === "nvidia" && config.enableThinking !== undefined ? { enableThinking: config.enableThinking } : {}),
-      ...(config.translationMethod === "qwenMt" && config.domains !== undefined ? { domains: config.domains } : {}),
-      ...(fullText !== undefined ? { fullText } : {}),
-    };
+      ...extras,
+    } as TranslateTextParams;
 
     try {
       return await pRetry(
@@ -430,12 +409,16 @@ const useTranslateData = () => {
     documentType: "subtitle" | "markdown" | "generic" = "subtitle",
     fullText?: string,
   ) => {
-    const initialContextWindow = Math.min(translationConfig.contextWindow || 20, contentLines.length);
+    // Clamp to >= 1: `|| 20` only catches 0/null/undefined, not negatives.
+    // A negative contextWindow (from corrupted localStorage or bad migration)
+    // would make the main loop `i += -5` → infinite loop.
+    const initialContextWindow = Math.max(1, Math.min(translationConfig.contextWindow || 20, contentLines.length));
     const translatedLines = new Array(contentLines.length);
     const MAX_CONTEXT_RETRIES = 2; // Maximum times to reduce context window
 
     // Inner function to translate a batch with a specific context window size
-    const translateBatch = async (batchStart: number, batchEnd: number, contextWindow: number, retryCount: number = 0): Promise<boolean> => {
+    // Translate a single batch with context markers, returns true if all lines translated
+    const translateSingleBatch = async (batchStart: number, batchEnd: number, contextWindow: number): Promise<boolean> => {
       const contextPadding = Math.min(MAX_CONTEXT_PADDING, Math.max(1, Math.floor(contextWindow / 2)));
       const contextStart = Math.max(0, batchStart - contextPadding);
       const contextEnd = Math.min(contentLines.length, batchEnd + contextPadding);
@@ -464,97 +447,199 @@ const useTranslateData = () => {
         );
 
         const translatedBatch = extractTranslatedLinesWithNumbers(result || "", batchEnd - batchStart);
-
-        // Fill in translated lines
         for (let j = 0; j < translatedBatch.length; j++) {
           if (batchStart + j < contentLines.length && translatedBatch[j]) {
             translatedLines[batchStart + j] = translatedBatch[j];
           }
         }
 
-        // Check for incomplete batch
-        for (let k = batchStart; k < batchEnd; k++) {
-          if (!translatedLines[k]) {
-            // Batch incomplete - try smaller context window if retries available
-            if (retryCount < MAX_CONTEXT_RETRIES && contextWindow > 5) {
-              const newContextWindow = Math.max(5, Math.floor(contextWindow / 2));
-              console.warn(`Batch ${batchStart + 1}-${batchEnd} incomplete, reducing context window from ${contextWindow} to ${newContextWindow}`);
+        // Reflect partial progress as soon as the batch returns, so the bar doesn't
+        // sit at 0% for the full duration of each 50-line LLM call.
+        const doneSoFar = translatedLines.filter(Boolean).length;
+        if (doneSoFar > 0) updateProgress(doneSoFar, contentLines.length);
 
-              // Re-translate only the incomplete portion with smaller batches
-              for (let subStart = batchStart; subStart < batchEnd; subStart += newContextWindow) {
-                const subEnd = Math.min(subStart + newContextWindow, batchEnd);
-                // Only process if there are missing lines in this sub-batch
-                let hasMissing = false;
-                for (let m = subStart; m < subEnd; m++) {
-                  if (!translatedLines[m]) {
-                    hasMissing = true;
-                    break;
-                  }
-                }
-                if (hasMissing) {
-                  const subSuccess = await translateBatch(subStart, subEnd, newContextWindow, retryCount + 1);
-                  if (!subSuccess) {
-                    return false; // Recursive call failed, need individual fallback
-                  }
-                }
-              }
-              // After all recursive calls, verify all lines are now translated
-              for (let v = batchStart; v < batchEnd; v++) {
-                if (!translatedLines[v]) {
-                  return false; // Still missing, need individual fallback
-                }
-              }
-              return true; // All lines now translated via recursion
-            }
-            return false; // Need individual fallback
-          }
-        }
-        return true; // All lines translated
+        return !translatedLines.slice(batchStart, batchEnd).includes(undefined);
       } catch (error) {
-        if (isAuthError(error)) {
-          throw error;
-        }
+        if (isAuthError(error)) throw error;
         console.warn(`Batch ${batchStart + 1}-${batchEnd} translation error:`, error);
-        return false; // Need individual fallback
+        return false;
       }
     };
 
-    // Main loop: process batches
-    for (let i = 0; i < contentLines.length; i += initialContextWindow) {
-      const batchEnd = Math.min(i + initialContextWindow, contentLines.length);
+    // Iterative batch translation with context window reduction (replaces recursion)
+    const translateBatch = async (batchStart: number, batchEnd: number, contextWindow: number): Promise<boolean> => {
+      const success = await translateSingleBatch(batchStart, batchEnd, contextWindow);
+      if (success) return true;
 
-      const success = await translateBatch(i, batchEnd, initialContextWindow);
+      // Reduce context window and retry ONLY the contiguous gaps (up to MAX_CONTEXT_RETRIES times)
+      // Old behavior stepped through fixed-size sub-ranges and re-translated the whole sub-range
+      // if any line in it was still missing — wasting tokens on already-successful neighbors and
+      // risking LLM non-determinism overwriting them with slightly different translations.
+      // New behavior finds the still-empty indices, clusters them into contiguous [s, e) ranges
+      // (capped at RETRY_MAX_CLUSTER_SIZE), and retranslates only those — fewer tokens, stable
+      // results for the lines that already succeeded.
+      let currentWindow = contextWindow;
+      for (let attempt = 0; attempt < MAX_CONTEXT_RETRIES && currentWindow > 5; attempt++) {
+        currentWindow = Math.max(5, Math.floor(currentWindow / 2));
 
-      if (!success) {
-        // Individual line fallback for any remaining untranslated lines
-        console.warn(`Batch ${i + 1}-${batchEnd} requires individual translation fallback`);
-        for (let j = i; j < batchEnd; j++) {
-          if (translatedLines[j]) continue; // Skip already translated
-
-          try {
-            translatedLines[j] = await retryTranslate(contentLines[j], cacheSuffix, translationConfig, fullText);
-          } catch (lineError) {
-            throw lineError; // Fail-stop
-          }
-          updateProgress(j + 1, contentLines.length);
-          if (j < batchEnd - 1) await delay(translationConfig.delayTime || 200);
+        const missing: number[] = [];
+        for (let k = batchStart; k < batchEnd; k++) {
+          if (!translatedLines[k]) missing.push(k);
         }
+        if (missing.length === 0) return true;
+
+        const gapClusters = clusterAscendingIndices(missing);
+        console.warn(`Batch ${batchStart + 1}-${batchEnd} incomplete (${missing.length} line(s) missing in ${gapClusters.length} gap(s)); reducing window to ${currentWindow}`);
+
+        for (const [gs, ge] of gapClusters) {
+          if (abortControllerRef.current?.signal.aborted) return false;
+          await translateSingleBatch(gs, ge, currentWindow);
+        }
+
+        if (!translatedLines.slice(batchStart, batchEnd).includes(undefined)) return true;
       }
 
-      updateProgress(batchEnd, contentLines.length);
-      if (batchEnd < contentLines.length) {
-        await delay(translationConfig.delayTime || 500);
+      return false;
+    };
+
+    // Helper: group contiguous failed indices into [start, end) clusters
+    // (capped so a total blowout doesn't retry as one mega-batch). Reused
+    // below by the batch-level fallback and the post-pass auto-retry.
+    const RETRY_MAX_CLUSTER_SIZE = 10;
+    const RETRY_CONTEXT_WINDOW = 6; // ±3 neighbor lines wrapped as [CONTEXT]
+    const clusterAscendingIndices = (sortedIndices: number[]): Array<[number, number]> => {
+      if (sortedIndices.length === 0) return [];
+      const out: Array<[number, number]> = [];
+      let s = sortedIndices[0];
+      let e = sortedIndices[0];
+      for (let k = 1; k < sortedIndices.length; k++) {
+        const idx = sortedIndices[k];
+        if (idx === e + 1 && e - s + 1 < RETRY_MAX_CLUSTER_SIZE) {
+          e = idx;
+        } else {
+          out.push([s, e + 1]);
+          s = idx;
+          e = idx;
+        }
+      }
+      out.push([s, e + 1]);
+      return out;
+    };
+
+    // Helper: retry any still-empty slots in [rangeStart, rangeEnd) by
+    // clustering them and feeding each cluster through translateSingleBatch
+    // with a small context window. Keeps LLM coherence on fallback and
+    // shares the ±3 neighbor context across cluster members — much cheaper
+    // than the old line-by-line-without-context fallback.
+    const clusterRetryFailures = async (rangeStart: number, rangeEnd: number): Promise<void> => {
+      const failed: number[] = [];
+      for (let i = rangeStart; i < rangeEnd; i++) {
+        if (!translatedLines[i]) failed.push(i);
+      }
+      if (failed.length === 0) return;
+
+      for (const [cStart, cEnd] of clusterAscendingIndices(failed)) {
+        if (abortControllerRef.current?.signal.aborted) return;
+        try {
+          await translateSingleBatch(cStart, cEnd, RETRY_CONTEXT_WINDOW);
+        } catch (err) {
+          if (isAuthError(err)) throw err;
+          // non-auth failures leave slots empty; final soft-fill handles them
+        }
+        updateProgress(translatedLines.filter(Boolean).length, contentLines.length);
+      }
+    };
+
+    // Show non-zero progress immediately so users see the modal is alive
+    // (a single LLM batch can take 20-60s before the first updateProgress call)
+    updateProgress(0.5, contentLines.length);
+
+    // Main loop: run batches in parallel with user-configurable concurrency.
+    // Context mode uses `contextBatchSize` — each task sends ~contextWindow
+    // lines to the LLM in a single heavy request, so we cap hard. Non-context
+    // line-by-line mode uses the separate `batchSize` (see translateContent
+    // below) which is safe to run higher since each request is a single short
+    // prompt. Defaults per provider:
+    //   - Cloud LLMs (claude, gemini, openai-compat, ...): 3 — under every
+    //     mainstream provider's concurrent cap (Claude paid 5-10, DeepSeek
+    //     30, Gemini generous). Free-tier users hitting 429 get caught by
+    //     pRetry + auto-retry.
+    //   - Custom LLM (Ollama local): 1 — Ollama runs inference single-threaded
+    //     by default, >1 concurrent would queue on the server and our 180s
+    //     retryTimeout would fire on queued requests before they run.
+    // Power users with proper paid tiers can raise contextBatchSize in
+    // Advanced Settings for faster throughput.
+    //
+    // Rate-limit safety: pRetry already treats 429 as retryable with backoff,
+    // auth errors cascade through abortControllerRef.abort() to stop peers
+    // immediately. Each task operates on a disjoint [batchStart, batchEnd)
+    // slice of translatedLines — no write contention.
+    const batchConcurrency = Math.max(Number(translationConfig.contextBatchSize) || 3, 1);
+    const batchLimit = pLimit(batchConcurrency);
+    const interBatchDelay = translationConfig.delayTime ?? 0;
+
+    const batchTasks: Promise<void>[] = [];
+    for (let i = 0; i < contentLines.length; i += initialContextWindow) {
+      const batchStart = i;
+      const batchEnd = Math.min(i + initialContextWindow, contentLines.length);
+
+      batchTasks.push(
+        batchLimit(async () => {
+          if (abortControllerRef.current?.signal.aborted) return;
+          // translateBatch handles context-window halving internally with
+          // cluster-aware gap retry. If it still returns false, the post-pass
+          // auto-retry (below, after Promise.all) handles it with a 10s
+          // breather — the only layer that actually gives rate-limited
+          // providers time to reset. translateSingleBatch catches all
+          // non-auth errors and returns false, so the only exception that
+          // escapes here is isAuthError, which we rethrow so Promise.all
+          // rejects and peer tasks abort via the shared signal.
+          await translateBatch(batchStart, batchEnd, initialContextWindow);
+          // Small gap AFTER each batch — helps severely rate-limited providers.
+          // pLimit already throttles concurrency; this adds an optional per-slot
+          // pause when users configure delayTime.
+          if (interBatchDelay > 0 && !abortControllerRef.current?.signal.aborted) {
+            await delay(interBatchDelay);
+          }
+        }),
+      );
+    }
+    await Promise.all(batchTasks);
+
+    // ─── Auto-retry pass ────────────────────────────────────────────────
+    // After the main pass (batches + halved-context retry), any slot still
+    // empty most likely hit a rate-limit window or a transient service
+    // hiccup — not something pRetry's sub-7s backoff would recover. Wait
+    // 10s to let rate-limit counters reset / the service stabilize, then
+    // retry via the same cluster helper over the entire range.
+    if (translatedLines.some((x) => !x) && !abortControllerRef.current?.signal.aborted) {
+      console.log("Auto-retry remaining failed lines after 10s with clustered small-context retry...");
+      await delay(10000);
+      try {
+        await clusterRetryFailures(0, contentLines.length);
+      } catch (err) {
+        if (isAuthError(err)) throw err;
+        // Non-auth: leave remaining failures for the final soft-fill.
       }
     }
 
-    // Final validation - this should rarely happen as individual fallback should catch everything
+    // ─── Final soft-fail ────────────────────────────────────────────────
+    // Slots still empty after auto-retry get filled with the original text
+    // so the output is usable. Only non-whitespace originals count as real
+    // failures — empty/whitespace-only lines (common in subtitle spacing,
+    // markdown blank lines) weren't meaningful translations in the first
+    // place, so flagging them as failures would just confuse the UI.
+    const failedLinesList: string[] = [];
     for (let i = 0; i < translatedLines.length; i++) {
       if (!translatedLines[i]) {
-        throw new Error(
-          `翻译失败：第 ${i + 1} 行在多次重试后仍未成功翻译，请检查 API 设置或稍后重试。\n` +
-            `Translation failed: Line ${i + 1} could not be translated after multiple retries. Please check API settings or retry later.`,
-        );
+        const original = contentLines[i];
+        translatedLines[i] = original;
+        if (original && original.trim()) failedLinesList.push(original);
       }
+    }
+    if (failedLinesList.length > 0) {
+      setTranslateFailedCount((prev) => prev + failedLinesList.length);
+      setTranslateFailedLines((prev) => [...prev, ...failedLinesList]);
     }
 
     return translatedLines;
@@ -580,10 +665,7 @@ const useTranslateData = () => {
       // Initialize new abort controller for this translation batch
       abortControllerRef.current = new AbortController();
 
-      const updateProgress = (current: number, total: number) => {
-        const progress = ((fileIndex + current / total) / totalFiles) * 100;
-        setProgressPercent(progress);
-      };
+      const updateProgress = makeUpdateProgress(fileIndex, totalFiles);
 
       const translationConfig: TranslationRuntimeConfig = {
         translationMethod: translationMethodArg,
@@ -598,9 +680,11 @@ const useTranslateData = () => {
       // Only create fullText if the prompt uses ${fullText} variable
       const fullText = effectiveUserPrompt.includes("${fullText}") ? contentLines.join("\n") : undefined;
 
-      const cacheSuffix = await generateCacheSuffix(sourceLanguage, currentTargetLang, translationMethodArg, {
-        model: config?.model,
-        temperature: config?.temperature,
+      const cacheSuffix = generateCacheSuffix({
+        sourceLanguage,
+        targetLanguage: currentTargetLang,
+        translationMethod: translationMethodArg,
+        config,
         sysPrompt: effectiveSysPrompt,
         userPrompt: effectiveUserPrompt,
       });
@@ -617,6 +701,11 @@ const useTranslateData = () => {
         let completedCount = 0;
         let aborted = false;
 
+        // Throttle progress updates for large batches to reduce re-renders,
+        // but update every item when the total is small so the bar isn't stuck at 0%.
+        const progressStep = Math.max(1, Math.floor(contentLines.length / 100));
+        updateProgress(0.5, contentLines.length);
+
         const promises = contentLines.map((line, index) =>
           limit(async () => {
             if (aborted) return;
@@ -627,7 +716,7 @@ const useTranslateData = () => {
               throw error;
             }
             completedCount++;
-            if (completedCount % 10 === 0 || completedCount === contentLines.length) {
+            if (completedCount % progressStep === 0 || completedCount === contentLines.length) {
               updateProgress(completedCount, contentLines.length);
             }
             if (baseDelay > 0 && completedCount < contentLines.length) {
@@ -667,6 +756,9 @@ const useTranslateData = () => {
   // Translation handlers
   const handleTranslate = async (performTranslation: PerformTranslation, sourceText: string, documentType?: "subtitle" | "markdown" | "generic") => {
     setTranslatedText("");
+    // Reset soft-failure state for this run — the UI Alert is driven by these.
+    setTranslateFailedCount(0);
+    setTranslateFailedLines([]);
     if (!sourceText.trim()) {
       message.error("No source text provided.");
       return;
@@ -676,7 +768,7 @@ const useTranslateData = () => {
     if (!isValid) return;
 
     setTranslateInProgress(true);
-    setProgressPercent(0);
+    resetProgress();
     try {
       await performTranslation(sourceText, undefined, undefined, undefined, documentType);
     } finally {
@@ -712,13 +804,17 @@ const useTranslateData = () => {
     setMultiLanguageMode,
     translatedText,
     setTranslatedText,
+    translateFailedCount,
+    translateFailedLines,
     translateInProgress,
     setTranslateInProgress,
     progressPercent,
     setProgressPercent,
+    progressInfo,
     extractedText,
     setExtractedText,
     handleLanguageChange,
+    handleSwapLanguages,
     delay,
     retryCount,
     setRetryCount,
@@ -732,6 +828,15 @@ const useTranslateData = () => {
     deleteLlmPreset,
     renameLlmPreset,
     updateLlmPreset,
+    promptPresets,
+    setPromptPresets,
+    activePromptPresetId,
+    setActivePromptPresetId,
+    savePromptPreset,
+    loadPromptPreset,
+    deletePromptPreset,
+    renamePromptPreset,
+    updatePromptPreset,
   };
 };
 

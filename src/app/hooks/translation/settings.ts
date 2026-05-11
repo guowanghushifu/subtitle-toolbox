@@ -13,6 +13,8 @@ export interface TranslationSettings {
   target_langs: string[];
   multiLanguageMode: boolean;
   llmPresets?: Array<{ id: string; name: string; config: TranslationConfig; sysPrompt?: string; userPrompt?: string }>;
+  promptPresets?: Array<{ id: string; name: string; sysPrompt: string; userPrompt: string }>;
+  activePromptPresetId?: string;
   exportDate?: string;
   version?: string;
 }
@@ -79,14 +81,15 @@ export const createSettingsFileInput = (
     document.body.appendChild(fileInput);
     fileInput.click();
 
-    // Cleanup DOM element
+    // Cleanup DOM element after change fires or after user cancels (no change event)
     const cleanup = () => {
       if (document.body.contains(fileInput)) {
         document.body.removeChild(fileInput);
       }
     };
 
-    setTimeout(cleanup, 100);
-    fileInput.addEventListener("change", cleanup, { once: true });
+    // Use change event for cleanup after file selection; use focusback for cancel detection
+    fileInput.addEventListener("change", () => setTimeout(cleanup, 0), { once: true });
+    window.addEventListener("focus", () => setTimeout(cleanup, 300), { once: true });
   });
 };

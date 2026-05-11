@@ -27,7 +27,7 @@ export const languages: LanguageOption[] = [
   { value: "nl", name: "Dutch", nativelabel: "Nederlands" },
   { value: "sv", name: "Swedish", nativelabel: "Svenska" },
   { value: "da", name: "Danish", nativelabel: "Dansk" },
-  { value: "nb", name: "Norwegian", nativelabel: "Norsk bokmål" },
+  { value: "nb", name: "Norwegian Bokmål", nativelabel: "Norsk bokmål" },
   { value: "is", name: "Icelandic", nativelabel: "Íslenska" },
   { value: "af", name: "Afrikaans", nativelabel: "Afrikaans" },
   { value: "ro", name: "Romanian", nativelabel: "Română" },
@@ -87,27 +87,30 @@ export const languages: LanguageOption[] = [
   { value: "ug", name: "Uyghur", nativelabel: "ئۇيغۇرچە" },
 ];
 
-// DeepL/DeepLX 不支持的语言
-const DEEPL_UNSUPPORTED_LANGS = new Set(["kn", "am", "ug", "si", "lo"]);
+// Unsupported language sets per translation method
+const UNSUPPORTED_LANGS: Record<string, Set<string>> = {
+  deepl: new Set(["kn", "am", "ug", "si", "lo"]),
+  deeplx: new Set(["kn", "am", "ug", "si", "lo"]),
+  azure: new Set(["jv"]),
+  qwenMt: new Set(["ky", "tk", "tg", "mn", "ml", "pa", "bho", "ha", "am", "ug"]),
+  // TranslateGemma: yue (Cantonese) and bho (Bhojpuri) aren't in the model's
+  // training set. `auto` is handled separately via REQUIRES_EXPLICIT_SOURCE.
+  // Code/name overrides for region-script variants (zh-Hans, pt-BR, etc.)
+  // live in services/traditional.ts as TRANSLATEGEMMA_OVERRIDES — most
+  // codes pass through unchanged using languages[].name.
+  translategemma: new Set(["yue", "bho"]),
+};
 
-// Azure 不支持的语言（仅 jv）
-const AZURE_UNSUPPORTED_LANGS = new Set(["jv"]);
-
-// Qwen-MT 不支持的语言 (基于 qwen-mt-plus/flash/turbo 支持的92种语言)
-const QWEN_MT_UNSUPPORTED_LANGS = new Set(["ky", "tk", "tg", "mn", "ml", "pa", "bho", "ha", "am", "ug"]);
+/**
+ * Methods that require an explicit source language because the underlying model has
+ * no language-detection mode. Triggers a different error message than UNSUPPORTED_LANGS
+ * — "pick a real source" rather than "language not supported".
+ */
+export const REQUIRES_EXPLICIT_SOURCE: ReadonlySet<string> = new Set(["translategemma"]);
 
 /**
  * 检查翻译方法是否支持指定语言
  */
 export function isMethodSupportedForLanguage(method: string, lang: string): boolean {
-  if (method === "deepl" || method === "deeplx") {
-    return !DEEPL_UNSUPPORTED_LANGS.has(lang);
-  }
-  if (method === "azure") {
-    return !AZURE_UNSUPPORTED_LANGS.has(lang);
-  }
-  if (method === "qwenMt") {
-    return !QWEN_MT_UNSUPPORTED_LANGS.has(lang);
-  }
-  return true; // GTX, Google, LLM 等都支持所有语言
+  return !UNSUPPORTED_LANGS[method]?.has(lang);
 }

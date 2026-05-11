@@ -1,50 +1,61 @@
 // Translation utility functions
 
-import { languages, isMethodSupportedForLanguage } from "./languages-data";
+import { languages, isMethodSupportedForLanguage, REQUIRES_EXPLICIT_SOURCE } from "./languages-data";
 import type { TranslationMethod } from "./types";
 
+// Pre-computed lookup maps for O(1) language access
+const languageNameMap = new Map(languages.map((lang) => [lang.value, lang.name]));
+const validLanguageCodes = new Set(languages.map((lang) => lang.value));
+
 /**
- * Get language name from language code
+ * Get language name from language code (O(1) Map lookup)
  */
 export const getLanguageName = (value: string): string => {
-  const language = languages.find((lang) => lang.value === value);
-  return language ? language.name : value;
+  return languageNameMap.get(value) ?? value;
 };
 
 /**
  * Check if a value is a valid language code
  */
-const validLanguageCodes = new Set(languages.map((lang) => lang.value));
 export const isValidLanguageValue = (testValue: string): boolean => {
   return validLanguageCodes.has(testValue);
 };
 
 /**
  * Check if a translation method supports the given source and target languages
- * Returns { supported: boolean, errorMessage?: string }
  */
-export const checkLanguageSupport = (translationMethod: TranslationMethod, sourceLanguage: string, targetLanguage: string): { supported: boolean; errorMessage?: string } => {
-  const sourceLang = languages.find((lang) => lang.value === sourceLanguage);
-  const targetLang = languages.find((lang) => lang.value === targetLanguage);
 
-  if (!sourceLang || !targetLang) {
-    console.error("Invalid language code provided");
+export const checkLanguageSupport = (translationMethod: TranslationMethod, sourceLanguage: string, targetLanguage: string): { supported: boolean; errorMessage?: string; preserveMethod?: boolean } => {
+  const sourceName = languageNameMap.get(sourceLanguage);
+  const targetName = languageNameMap.get(targetLanguage);
+
+  if (!sourceName || !targetName) {
     return { supported: false, errorMessage: "Invalid language code provided" };
   }
 
-  const isSourceSupported = isMethodSupportedForLanguage(translationMethod, sourceLanguage);
-  const isTargetSupported = isMethodSupportedForLanguage(translationMethod, targetLanguage);
-
-  if (!isSourceSupported) {
+  // Methods that need explicit source (no auto-detect mode in the model). Keep
+  // this check ahead of UNSUPPORTED_LANGS so the user sees a fix-the-source
+  // hint instead of the misleading "doesn't support Auto" wording.
+  // preserveMethod=true so the caller doesn't switch to the fallback service —
+  // the user picked this method on purpose, they just need to fix the source.
+  if (sourceLanguage === "auto" && REQUIRES_EXPLICIT_SOURCE.has(translationMethod)) {
     return {
       supported: false,
-      errorMessage: `${translationMethod.toUpperCase()} doesn't support ${sourceLang.name}. Switching to free GTX API now.`,
+      preserveMethod: true,
+      errorMessage: `${translationMethod.toUpperCase()} requires an explicit source language (no auto-detect). Please select a specific source language. / ${translationMethod.toUpperCase()} 不支持自动检测源语言，请明确选择一个源语言。`,
     };
   }
-  if (!isTargetSupported) {
+
+  if (!isMethodSupportedForLanguage(translationMethod, sourceLanguage)) {
     return {
       supported: false,
-      errorMessage: `${translationMethod.toUpperCase()} doesn't support ${targetLang.name}. Switching to free GTX API now.`,
+      errorMessage: `${translationMethod.toUpperCase()} doesn't support ${sourceName}. Switching to free GTX API now.`,
+    };
+  }
+  if (!isMethodSupportedForLanguage(translationMethod, targetLanguage)) {
+    return {
+      supported: false,
+      errorMessage: `${translationMethod.toUpperCase()} doesn't support ${targetName}. Switching to free GTX API now.`,
     };
   }
 
@@ -52,23 +63,26 @@ export const checkLanguageSupport = (translationMethod: TranslationMethod, sourc
 };
 
 /**
- * Split text into chunks for batch translation
+ * Split text into chunks for batch translation (array join avoids O(n^2) string concat)
  */
 export const splitTextIntoChunks = (text: string, maxLength: number, delimiter: string): string[] => {
   const chunks: string[] = [];
-  let currentChunk = "";
+  const parts: string[] = [];
+  let currentLength = 0;
 
-  text.split(delimiter).forEach((line) => {
-    if (currentChunk.length + line.length + 1 > maxLength) {
-      chunks.push(currentChunk);
-      currentChunk = line;
-    } else {
-      currentChunk += currentChunk ? delimiter + line : line;
+  for (const line of text.split(delimiter)) {
+    const addedLength = parts.length > 0 ? delimiter.length + line.length : line.length;
+    if (currentLength + addedLength > maxLength && parts.length > 0) {
+      chunks.push(parts.join(delimiter));
+      parts.length = 0;
+      currentLength = 0;
     }
-  });
+    parts.push(line);
+    currentLength += parts.length === 1 ? line.length : delimiter.length + line.length;
+  }
 
-  if (currentChunk) {
-    chunks.push(currentChunk);
+  if (parts.length > 0) {
+    chunks.push(parts.join(delimiter));
   }
 
   return chunks;
@@ -83,25 +97,35 @@ export const getAIModelPrompt = (content: string, userPrompt: string, targetLang
   if (sourceLanguage === "auto") {
     prompt = prompt.replace(/from \${sourceLanguage} (to|into)/g, "into");
   }
-  prompt = prompt.replace("${sourceLanguage}", getLanguageName(sourceLanguage)).replace("${targetLanguage}", getLanguageName(targetLanguage)).replace("${content}", content);
 
-  // Only replace ${fullText} if it's actually used in the prompt
+  const vars: Record<string, string> = {
+    "${sourceLanguage}": getLanguageName(sourceLanguage),
+    "${targetLanguage}": getLanguageName(targetLanguage),
+    "${content}": content,
+  };
   if (prompt.includes("${fullText}")) {
-    prompt = prompt.replace("${fullText}", fullText || content);
+    vars["${fullText}"] = fullText || content;
   }
 
+  for (const [key, value] of Object.entries(vars)) {
+    prompt = prompt.replaceAll(key, value);
+  }
   return prompt;
 };
 
 /**
- * Clean HTML entities from translated text
+ * Clean HTML entities from translated text (single-pass replacement)
  */
+const HTML_ENTITY_MAP: Record<string, string> = {
+  "&#39;": "'",
+  "&quot;": '"',
+  "&apos;": "'",
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+};
+const HTML_ENTITY_RE = /&#39;|&quot;|&apos;|&amp;|&lt;|&gt;/g;
+
 export const cleanTranslatedText = (text: string): string => {
-  return text
-    .replace(/&#39;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
+  return text.replace(HTML_ENTITY_RE, (match) => HTML_ENTITY_MAP[match]);
 };
