@@ -25,3 +25,8 @@ test("contains separate unmatched labels for bilingual composition", () => {
   assert.equal(copy.composer.translatedUnmatched, "Translated unmatched");
   assert.equal(copy.composer.originalUnmatched, "Original unmatched");
 });
+
+test("owns bilingual input reset copy without relying on upstream locale keys", () => {
+  assert.equal(getSubtitleToolsCopy("zh").composer.resetInput, "清空输入");
+  assert.equal(getSubtitleToolsCopy("de").composer.resetInput, "Clear Input");
+});

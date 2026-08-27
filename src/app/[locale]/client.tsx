@@ -8,6 +8,7 @@ import { TranslationProvider } from "@/app/components/TranslationContext";
 import { getDocUrl } from "@/app/utils";
 import ToolPage from "@/app/components/styled/ToolPage";
 import ApiSettingsDrawer from "@/app/components/ApiSettingsDrawer";
+import SubtitleToolsWorkspace from "@/features/subtitle-tools/SubtitleToolsWorkspace";
 
 const ClientPage = () => {
   const tSubtitle = useTranslations("SubtitleTranslator");
@@ -17,7 +18,7 @@ const ClientPage = () => {
   return (
     <TranslationProvider>
       <ToolPage icon={<VideoCameraOutlined />} toolKey="subtitleTranslator" description={tSubtitle("clientDescription")} guideUrl={userGuideUrl}>
-        <SubtitleTranslator />
+        <SubtitleToolsWorkspace translationPanel={<SubtitleTranslator />} />
       </ToolPage>
       <ApiSettingsDrawer />
     </TranslationProvider>

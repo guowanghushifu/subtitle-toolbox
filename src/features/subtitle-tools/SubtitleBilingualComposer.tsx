@@ -225,7 +225,7 @@ const SubtitleBilingualComposer = () => {
             input.reset();
             clearResults();
           }}>
-          {t("resetUpload")}
+          {copy.resetInput}
         </Button>
       }
       className="h-full">
