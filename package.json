@@ -8,6 +8,7 @@
     "build:lang": "node scripts/buildWithLang.js",
     "start": "next start",
     "lint": "eslint",
+    "test:subtitle-tools": "node --import tsx --test tests/subtitle-tools/*.test.ts",
     "outdated": "ncu",
     "cli": "tsx scripts/cli.ts"
   },
