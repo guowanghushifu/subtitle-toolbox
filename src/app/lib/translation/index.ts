@@ -1,12 +1,12 @@
-// Main translation module
-// Re-exports all translation functionality from modular files
+// Translation barrel: re-exports submodules + top-level testTranslation /
+// translateText / useTranslation orchestration.
 
 "use client";
 
-import type { TranslateTextParams, TranslationMethod } from "./types";
-import { translationServices } from "./services";
-import { generateCacheKey, getCachedTranslation, setCachedTranslation } from "./cache";
-import { cleanTranslatedText } from "./utils";
+import type { TranslateTextParams, TranslationConfig, TranslationMethod } from "./types";
+import { deriveThinkingParams } from "./registry";
+import { translateCore, runReachabilityProbe } from "./pipeline";
+import { translationCache } from "@/app/lib/storage/indexedDBStorage";
 
 // Re-export everything for backwards compatibility
 export * from "./types";
@@ -15,90 +15,81 @@ export * from "./config";
 export * from "./cache";
 export * from "./languages-data";
 export * from "./utils";
+export * from "./pipeline";
 export { translationServices } from "./services";
-export { translategemmaHealthCheck } from "./services/traditional";
-export { completeOpenAICompatUrl } from "./services/shared";
+export { completeOpenAICompatUrl, RELAY_HINT_MARKER, LLM_RELAY_BASE, isValidRelayBase, usesBuiltinRelay } from "./services/shared";
 
 /**
- * Test translation with a given method and config
+ * Test translation with a given method and config for the manual "Test Connection"
+ * UI. Returns `null` on success, or the caught ERROR OBJECT \u2014 callers render it
+ * via describeError(error, t), which keeps the raw reason ("[403] \u2026", "Failed to
+ * fetch") AND appends the status-mapped localized hint (common.errorHint*). \u8fd4\u56de
+ * \u5bf9\u8c61\u800c\u975e message \u5b57\u7b26\u4e32,\u662f\u4e3a\u4e86\u628a .status \u5e26\u5230\u5c55\u793a\u5c42 \u2014\u2014 i18n \u63d0\u793a\u6309\u5b83\u67e5\u952e\u3002
  */
-export const testTranslation = async (translationMethod: TranslationMethod, config: Partial<TranslateTextParams>, sysPrompt?: string, userPrompt?: string): Promise<boolean> => {
+export const testTranslation = async (translationMethod: TranslationMethod, config: Partial<TranslateTextParams>, systemPrompt?: string, userPrompt?: string, signal?: AbortSignal): Promise<unknown | null> => {
   try {
-    const params: TranslateTextParams = {
-      text: "Hello, world!",
-      targetLanguage: "zh",
-      sourceLanguage: "en",
-      cacheSuffix: "test",
-      translationMethod,
-      useCache: false,
-      ...config,
-      ...(sysPrompt && { sysPrompt }),
-      ...(userPrompt && { userPrompt }),
-    };
-
-    const result = await translationServices[translationMethod](params);
-
-    if (!result) throw new Error("Translation Test failed, no result received.");
-
-    // Validate that translation actually occurred
-    // For Chinese target language, result should contain Chinese characters
-    if (params.targetLanguage === "zh" && !/[\u4e00-\u9fa5]/.test(result)) {
+    const result = await runReachabilityProbe(translationMethod, config, systemPrompt, userPrompt, signal);
+    // Probe target is zh, so result should contain Chinese \u2014 warn (not fail) if not.
+    if (!/[\u4e00-\u9fa5]/.test(result)) {
       console.warn("Translation result does not contain Chinese characters, may not have actually translated:", result);
     }
-
     // Warn if result is identical to source (possible translation failure)
-    if (result === params.text) {
+    if (result === "Hello, world!") {
       console.warn("Translation returned original text unchanged, may indicate translation service issue");
     }
-
-    return true;
+    return null;
   } catch (error) {
     console.error("Translation Test failed", error);
-    return false;
+    return error ?? new Error("Unknown test failure");
   }
 };
-
-// Skip translation if text has no translatable characters
-const HAS_TRANSLATABLE_CONTENT = /[a-zA-Z\p{L}]/u;
 
 /**
- * Translate text using the specified method
- * Throws on error to allow retry logic to work properly
+ * 两个「测试连接」按钮(ApiStatusBlock / TranslationSettings)的共用入口:
+ * testTranslation + 超时控制 + thinking 参数派生,一处实现。
+ *
+ * 超时取调用方传入的 requestTimeoutSec —— 与正式翻译同源。原则(同
+ * retry.ts 的 preflight gate):Test 不得比它守护的翻译更严格;30s 硬编码
+ * 曾让"慢速本地思考模型"(思考半分钟才出首字)测试假阴性、翻译却能跑。
+ *
+ * 返回 { error, timedOut }:timedOut 让调用方把中止归类为"测试超时",
+ * 而不是裸 abort 文案;error 为原始错误对象(展示层经 describeError 渲染)。
  */
-const translateText = async (params: TranslateTextParams): Promise<string> => {
-  const { text, cacheSuffix, translationMethod, targetLanguage, sourceLanguage, useCache = true } = params;
-
-  if (!HAS_TRANSLATABLE_CONTENT.test(text) || sourceLanguage === targetLanguage) {
-    return text;
+export const testTranslationWithTimeout = async (
+  translationMethod: TranslationMethod,
+  // relayBase is global (outside per-provider config) — callers merge it in so
+  // the Test hits the same relay host real translation will.
+  config: (TranslationConfig & { relayBase?: string }) | undefined,
+  timeoutSec: number,
+  systemPrompt?: string,
+  userPrompt?: string,
+): Promise<{ error: unknown; timedOut: boolean }> => {
+  // Mirror the orchestrator's gate so the Test exercises the same wire payload
+  // as actual translation (effort level — undefined = thinking off).
+  const testParams: Partial<TranslateTextParams> = {
+    ...(config as Partial<TranslateTextParams>),
+    reasoningEffort: deriveThinkingParams(translationMethod, config),
+  };
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutSec * 1000);
+  try {
+    const error = await testTranslation(translationMethod, testParams, systemPrompt, userPrompt, controller.signal);
+    return { error, timedOut };
+  } finally {
+    clearTimeout(timeout);
   }
-
-  // Check cache
-  const cacheKey = generateCacheKey(text, cacheSuffix);
-  if (useCache) {
-    const cachedTranslation = await getCachedTranslation(cacheKey);
-    if (cachedTranslation) return cachedTranslation;
-  }
-
-  // Get translation service
-  const service = translationServices[translationMethod];
-  if (!service) {
-    throw new Error(`Unsupported translation method: ${translationMethod}`);
-  }
-
-  const translatedText = await service(params);
-
-  if (!translatedText) {
-    throw new Error(`No translation result received for method: ${translationMethod}`);
-  }
-
-  // Clean and cache result
-  const cleanedText = cleanTranslatedText(translatedText);
-  if (useCache) {
-    await setCachedTranslation(cacheKey, cleanedText);
-  }
-
-  return cleanedText;
 };
+
+/**
+ * Translate text using the specified method (browser entry — IndexedDB cache).
+ * Engine logic lives in ./pipeline (translateCore, cache-injected) so headless
+ * consumers (CLI / Node server) share it without pulling IndexedDB.
+ */
+const translateText = async (params: TranslateTextParams): Promise<string> => translateCore(params, translationCache);
 
 /**
  * React hook for translation

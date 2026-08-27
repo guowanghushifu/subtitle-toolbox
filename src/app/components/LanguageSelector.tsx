@@ -1,87 +1,243 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { Row, Col, Form, Select, Switch, Flex, Tooltip, Typography, Checkbox, Input, Button, Divider, theme } from "antd";
-import { SearchOutlined, SwapOutlined } from "@ant-design/icons";
+import { useCallback, useMemo, useState } from "react";
+import { ConfigProvider, Row, Col, Form, Select, Switch, Flex, Tooltip, Typography, Checkbox, Input, Button, Tag, Divider, theme } from "antd";
+import type { SelectProps } from "antd";
+import { SearchOutlined, SwapOutlined, CaretRightOutlined, CaretDownOutlined } from "@ant-design/icons";
 import { useTranslations } from "next-intl";
 import { useLanguageOptions, filterLanguageOption } from "@/app/components/languages";
+import { LANGUAGE_GROUPS, LANGUAGE_PRESETS } from "@/app/lib/translation";
+import { useIsMobile } from "@/app/hooks/useIsMobile";
+import { useRecentLanguages } from "@/app/hooks/useRecentLanguages";
 
 const { Text } = Typography;
+
+type LangOption = ReturnType<typeof useLanguageOptions>["targetOptions"][number];
 
 interface LanguageSelectorProps {
   sourceLanguage: string;
   targetLanguage: string;
-  target_langs: string[];
+  targetLanguages: string[];
   multiLanguageMode: boolean;
   handleLanguageChange: (type: "source" | "target", value: string) => void;
   handleSwapLanguages?: () => void;
-  setTarget_langs: (value: string[]) => void;
+  setTargetLanguages: (value: string[]) => void;
   setMultiLanguageMode: (value: boolean) => void;
+  /**
+   * 翻译进行中整块禁用。语言在点「翻译」那一刻就被闭包快照定死,运行中改只会
+   * 让控件翻转而产物纹丝不动 —— 想换语言,先取消(缓存即断点),改完再跑。
+   */
+  disabled?: boolean;
 }
 
 /**
  * Shared component for source/target language selection with multi-language mode toggle.
  * Used in SubtitleTranslator, MDTranslator, and JSONTranslator.
+ *
+ * UX for 122 languages:
+ * - Single-select: antd showSearch + a "Recent" optGroup pinned on top (last 5 picks)
+ * - Multi-select popup: regional groups (Common / Europe / Middle East / etc.)
+ *   collapsed by default except "Common"; search auto-expands; preset buttons
+ *   ("Top 10 World" / "European Mainstream" / etc.) for one-tap bulk pick;
+ *   selected chips above the grid let user see + remove individual picks;
+ *   mobile single-column grid so long native labels don't overflow.
  */
-const LanguageSelector = ({ sourceLanguage, targetLanguage, target_langs, multiLanguageMode, handleLanguageChange, handleSwapLanguages, setTarget_langs, setMultiLanguageMode }: LanguageSelectorProps) => {
+const LanguageSelector = ({ sourceLanguage, targetLanguage, targetLanguages, multiLanguageMode, handleLanguageChange, handleSwapLanguages, setTargetLanguages, setMultiLanguageMode, disabled = false }: LanguageSelectorProps) => {
   const t = useTranslations("common");
   const { sourceOptions, targetOptions } = useLanguageOptions();
-  const [searchValue, setSearchValue] = useState("");
+  const isMobile = useIsMobile();
   const { token } = theme.useToken();
+  const { recentLanguages, pushRecentLanguage } = useRecentLanguages();
+  const [searchValue, setSearchValue] = useState("");
 
-  // Filter options based on search - using same logic as source language selector
-  const filteredOptions = useMemo(() => {
-    if (!searchValue) return targetOptions;
-    return targetOptions.filter((opt) => filterLanguageOption({ input: searchValue, option: opt }));
-  }, [targetOptions, searchValue]);
+  // Wrap the prop callback so single-select picks land in the recent list.
+  const handleLanguagePick = (type: "source" | "target", value: string) => {
+    pushRecentLanguage(value);
+    handleLanguageChange(type, value);
+  };
 
-  // Handle checkbox change
+  // Build a code → LangOption lookup for O(1) access while grouping.
+  const sourceByCode = useMemo(() => new Map(sourceOptions.map((o) => [o.value, o])), [sourceOptions]);
+  const targetByCode = useMemo(() => new Map(targetOptions.map((o) => [o.value, o])), [targetOptions]);
+
+  // For the single-select Selects: prepend a "Recent" optGroup when the user
+  // has picked anything before. Falls back to flat list (current behavior) for
+  // first-time users. Antd accepts a mixed array (options + optGroups), so the
+  // wide return type is intentional.
+  const buildSingleSelectOptions = useCallback(
+    (options: LangOption[], byCode: Map<string, LangOption>): SelectProps["options"] => {
+      if (recentLanguages.length === 0) return options;
+      const recentOpts = recentLanguages.map((c) => byCode.get(c)).filter((o): o is LangOption => !!o);
+      if (recentOpts.length === 0) return options;
+      const recentSet = new Set(recentLanguages);
+      const rest = options.filter((o) => !recentSet.has(o.value));
+      return [
+        { label: t("recentLanguages"), options: recentOpts },
+        { label: t("langGroupCommon"), options: rest },
+      ];
+    },
+    [recentLanguages, t],
+  );
+  const sourceSelectOptions = useMemo(() => buildSingleSelectOptions(sourceOptions, sourceByCode), [sourceOptions, sourceByCode, buildSingleSelectOptions]);
+  const targetSelectOptions = useMemo(() => buildSingleSelectOptions(targetOptions, targetByCode), [targetOptions, targetByCode, buildSingleSelectOptions]);
+
+  // ── Multi-select popup state ─────────────────────────────────────────────
+  // Track per-group expanded state. Common is expanded by default — that's
+  // the entry point for most users; the rest fold to keep the popup compact.
+  // When search is active we ignore this and expand every visible group.
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() => ({ common: true }));
+
+  // Filter groups + their codes based on search. Empty groups disappear so
+  // the popup shrinks to just matches. Comparison uses the same predicate
+  // as the single-select search (label / name / value).
+  const visibleGroups = useMemo(() => {
+    if (!searchValue.trim()) return LANGUAGE_GROUPS.map((g) => ({ ...g, codes: [...g.codes] }));
+    return LANGUAGE_GROUPS.map((g) => ({
+      ...g,
+      codes: g.codes.filter((c) => {
+        const opt = targetByCode.get(c);
+        return opt ? filterLanguageOption({ input: searchValue, option: opt }) : false;
+      }),
+    })).filter((g) => g.codes.length > 0);
+  }, [searchValue, targetByCode]);
+
+  const isExpanded = (key: string) => (searchValue.trim() ? true : !!expandedGroups[key]);
+  const toggleGroup = (key: string) => {
+    if (searchValue.trim()) return; // disabled during search (everything is forced open)
+    setExpandedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
   const handleCheckboxChange = (value: string, checked: boolean) => {
-    if (checked) {
-      setTarget_langs([...target_langs, value]);
-    } else {
-      setTarget_langs(target_langs.filter((v) => v !== value));
-    }
+    if (checked) setTargetLanguages([...new Set([...targetLanguages, value])]);
+    else setTargetLanguages(targetLanguages.filter((v) => v !== value));
   };
 
-  // Select all filtered options
-  const handleSelectAll = () => {
-    const allValues = filteredOptions.map((opt) => opt.value);
-    const newSelection = [...new Set([...target_langs, ...allValues])];
-    setTarget_langs(newSelection);
+  const applyPreset = (codes: readonly string[]) => {
+    setTargetLanguages([...new Set([...targetLanguages, ...codes])]);
   };
 
-  // Clear all selections
-  const handleClearAll = () => {
-    setTarget_langs([]);
-  };
+  const handleClearAll = () => setTargetLanguages([]);
 
-  // Custom dropdown content for multi-language mode
-  const dropdownRender = () => (
-    <div style={{ padding: 8 }}>
-      <Input prefix={<SearchOutlined />} placeholder={t("search")} value={searchValue} onChange={(e) => setSearchValue(e.target.value)} className="!mb-2" allowClear />
-      <Flex gap={8} className="!mb-2">
-        <Button size="small" onClick={handleSelectAll}>
-          {t("selectAll")}
-        </Button>
-        <Button size="small" onClick={handleClearAll}>
+  const selectedSet = useMemo(() => new Set(targetLanguages), [targetLanguages]);
+
+  const popupRender = () => (
+    <div
+      style={{
+        padding: token.paddingXS,
+        minWidth: isMobile ? "min(90vw, 360px)" : 520,
+        maxWidth: isMobile ? "min(95vw, 480px)" : 800,
+      }}>
+      <Input
+        prefix={<SearchOutlined />}
+        placeholder={t("search")}
+        value={searchValue}
+        onChange={(e) => setSearchValue(e.target.value)}
+        allowClear
+        style={{ marginBottom: 8 }}
+      />
+
+      {/* Quick-pick presets — merge into selection (don't replace). */}
+      <Flex gap={4} wrap style={{ marginBottom: 8 }}>
+        {LANGUAGE_PRESETS.map((p) => (
+          <Button key={p.key} size="small" onClick={() => applyPreset(p.codes)}>
+            {t(p.labelKey)}
+          </Button>
+        ))}
+        <Button size="small" onClick={handleClearAll} disabled={targetLanguages.length === 0 || undefined}>
           {t("clearAll")}
         </Button>
       </Flex>
-      <Divider className="!my-0" />
-      <div style={{ maxHeight: 240, overflowY: "auto" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 4 }}>
-          {filteredOptions.map((opt) => (
-            <Checkbox key={opt.value} checked={target_langs.includes(opt.value)} onChange={(e) => handleCheckboxChange(opt.value, e.target.checked)} className="!m-0">
-              {opt.label}
-            </Checkbox>
-          ))}
-        </div>
+
+      {/* Selected chips — each removable. Caps display + count at end. */}
+      {targetLanguages.length > 0 && (
+        <>
+          <Flex wrap gap={4} style={{ marginBottom: 8 }}>
+            {targetLanguages.slice(0, 30).map((c) => {
+              const opt = targetByCode.get(c);
+              return (
+                <Tag key={c} closable onClose={() => handleCheckboxChange(c, false)} style={{ margin: 0 }}>
+                  {opt?.label ?? c}
+                </Tag>
+              );
+            })}
+            <Text type="secondary" style={{ fontSize: 12, alignSelf: "center" }}>
+              {t("selectedCount", { count: targetLanguages.length })}
+            </Text>
+          </Flex>
+          <Divider style={{ margin: "4px 0 8px" }} />
+        </>
+      )}
+
+      <div style={{ maxHeight: 320, overflowY: "auto" }}>
+        {visibleGroups.length === 0 && (
+          <Text type="secondary" style={{ display: "block", padding: token.paddingSM, textAlign: "center" }}>
+            {t("search")}: 0
+          </Text>
+        )}
+        {visibleGroups.map((g) => {
+          const expanded = isExpanded(g.key);
+          const selectedInGroup = g.codes.filter((c) => selectedSet.has(c)).length;
+          return (
+            <div key={g.key} style={{ marginBottom: 4 }}>
+              <Flex
+                align="center"
+                gap={4}
+                role="button"
+                tabIndex={0}
+                aria-expanded={expanded}
+                aria-label={t(g.labelKey)}
+                onClick={() => toggleGroup(g.key)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    toggleGroup(g.key);
+                  }
+                }}
+                style={{
+                  cursor: searchValue.trim() ? "default" : "pointer",
+                  padding: "4px 4px",
+                  userSelect: "none",
+                  background: token.colorFillTertiary,
+                  borderRadius: token.borderRadiusSM,
+                }}>
+                {expanded ? <CaretDownOutlined style={{ fontSize: 10 }} /> : <CaretRightOutlined style={{ fontSize: 10 }} />}
+                <Text strong style={{ fontSize: 12 }}>
+                  {t(g.labelKey)}
+                </Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {selectedInGroup > 0 ? `${selectedInGroup}/${g.codes.length}` : g.codes.length}
+                </Text>
+              </Flex>
+              {expanded && (
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)",
+                    gap: 4,
+                    padding: "4px 8px",
+                  }}>
+                  {g.codes.map((c) => {
+                    const opt = targetByCode.get(c);
+                    if (!opt) return null;
+                    return (
+                      <Checkbox key={c} checked={selectedSet.has(c)} onChange={(e) => handleCheckboxChange(c, e.target.checked)} style={{ margin: 0 }}>
+                        <Text style={{ fontSize: 13 }}>{opt.label}</Text>
+                      </Checkbox>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 
   return (
+    // ConfigProvider 一点锁全:两个 Select、交换按钮、多语言开关都消费
+    // DisabledContext;多选弹层锁上后根本打不开,里面的控件无需单独处理。
+    <ConfigProvider componentDisabled={disabled}>
     <div
       style={{
         padding: token.paddingSM,
@@ -94,8 +250,8 @@ const LanguageSelector = ({ sourceLanguage, targetLanguage, target_langs, multiL
           <Form.Item label={t("sourceLanguage")} className="!mb-0">
             <Select
               value={sourceLanguage}
-              onChange={(e) => handleLanguageChange("source", e)}
-              options={sourceOptions}
+              onChange={(e) => handleLanguagePick("source", e)}
+              options={sourceSelectOptions}
               placeholder={t("selectSourceLanguage")}
               showSearch={{
                 optionFilterProp: "children",
@@ -114,7 +270,9 @@ const LanguageSelector = ({ sourceLanguage, targetLanguage, target_langs, multiL
                 size="small"
                 icon={<SwapOutlined />}
                 onClick={handleSwapLanguages}
-                disabled={sourceLanguage === "auto" || multiLanguageMode}
+                // `|| undefined` 而非裸布尔:antd 是「自己的 disabled ?? context」,
+                // 条件为假时传下去的显式 false 会把外层运行中锁整个顶掉。
+                disabled={sourceLanguage === "auto" || multiLanguageMode || undefined}
                 aria-label={`${t("sourceLanguage")} ⇄ ${t("targetLanguage")}`}
               />
             </Tooltip>
@@ -125,8 +283,8 @@ const LanguageSelector = ({ sourceLanguage, targetLanguage, target_langs, multiL
             {!multiLanguageMode ? (
               <Select
                 value={targetLanguage}
-                onChange={(e) => handleLanguageChange("target", e)}
-                options={targetOptions}
+                onChange={(e) => handleLanguagePick("target", e)}
+                options={targetSelectOptions}
                 placeholder={t("selectTargetLanguage")}
                 showSearch={{
                   optionFilterProp: "children",
@@ -138,10 +296,23 @@ const LanguageSelector = ({ sourceLanguage, targetLanguage, target_langs, multiL
             ) : (
               <Select
                 open={undefined}
-                value={target_langs.length > 0 ? `${t("selectedLanguages")} ${target_langs.length}` : undefined}
+                value={targetLanguages.length > 0 ? t("selectedCount", { count: targetLanguages.length }) : undefined}
                 placeholder={t("selectMultiTargetLanguages")}
-                popupRender={dropdownRender}
-                popupStyle={{ minWidth: "min(480px, 90vw)" }}
+                popupRender={popupRender}
+                // Lock to bottomRight: target Select sits in the right column;
+                // popping leftward keeps the wide popup inside the viewport
+                // regardless of where antd's auto-flip would have decided to
+                // place it. Min 480/max 720 caps so long native labels can't
+                // stretch the popup into the next county.
+                placement="bottomRight"
+                popupStyle={{
+                  // Fixed widths on desktop — 800px fits 3-col grid with the
+                  // longest native labels (海地克里奥尔语 / Kreyòl ayisyen) and
+                  // any modern viewport ≥ 1024 holds it. Mobile uses vw-bounded
+                  // since phones span 320-430px viewport.
+                  minWidth: isMobile ? "min(90vw, 360px)" : 520,
+                  maxWidth: isMobile ? "min(95vw, 480px)" : 800,
+                }}
                 className="w-full"
                 aria-label={t("targetLanguage")}
                 popupMatchSelectWidth={false}
@@ -156,13 +327,31 @@ const LanguageSelector = ({ sourceLanguage, targetLanguage, target_langs, multiL
 
       <Flex justify="end" style={{ marginTop: token.marginXS }}>
         <Tooltip title={t("multiLanguageModeTooltip")} placement="bottom">
-          <label className="inline-flex items-center gap-1.5 cursor-pointer">
-            <Switch size="small" checked={multiLanguageMode} onChange={setMultiLanguageMode} aria-label={t("multiLanguageMode")} />
+          {/* 整个 label 可点（点文字就能切），但它只有 22px 高 —— 差 2px
+              到 WCAG 2.2 SC 2.5.8 的 24px 下限。py-1 擑高、-my-1 抵消，版式不变。 */}
+          <label className="inline-flex items-center gap-1.5 cursor-pointer py-1 -my-1">
+            <Switch
+              size="small"
+              checked={multiLanguageMode}
+              onChange={(checked) => {
+                // 切到多语言模式时把当前 targetLanguage 也带进 targetLanguages,
+                // 避免「target=en + 开多语言 → 实际只翻 zh」的反直觉行为。这里 inline
+                // 处理 (而非 wrap setMultiLanguageMode) 是为了避开 closure 陷阱:
+                // MultiLanguageSettingsModal Apply 路径会同 tick 先 setTargetLanguages
+                // 再 setMultiLanguageMode,若全局 wrap 会读到旧 closure 覆盖用户选择。
+                if (checked && !targetLanguages.includes(targetLanguage)) {
+                  setTargetLanguages([...targetLanguages, targetLanguage]);
+                }
+                setMultiLanguageMode(checked);
+              }}
+              aria-label={t("multiLanguageMode")}
+            />
             <Text type="secondary">{t("multiLanguageMode")}</Text>
           </label>
         </Tooltip>
       </Flex>
     </div>
+    </ConfigProvider>
   );
 };
 

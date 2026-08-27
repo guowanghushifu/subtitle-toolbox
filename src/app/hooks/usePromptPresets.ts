@@ -1,39 +1,52 @@
 "use client";
 
-import { useLocalStorage } from "@/app/hooks/useLocalStorage";
+import { usePresetCollection } from "@/app/hooks/usePresetCollection";
+import { DEFAULT_SYSTEM_PROMPT, DEFAULT_USER_PROMPT } from "@/app/lib/translation/config";
 
 export type PromptPreset = {
   id: string;
   name: string;
-  sysPrompt: string;
+  systemPrompt: string;
   userPrompt: string;
 };
 
+// Sentinel id for the always-present "default prompt" entry in the picker. User
+// presets use String(Date.now()) (numeric), so this never collides. It's a way
+// back to the factory prompts after the user has saved/edited their own presets.
+export const DEFAULT_PROMPT_PRESET_ID = "default";
+
 type Deps = {
-  effectiveSysPrompt: string;
+  effectiveSystemPrompt: string;
   effectiveUserPrompt: string;
-  setSysPrompt: (value: string) => void;
+  setSystemPrompt: (value: string) => void;
   setUserPrompt: (value: string) => void;
 };
 
 /**
- * CRUD for named prompt presets (sysPrompt + userPrompt). Independent of
+ * CRUD for named prompt presets (systemPrompt + userPrompt). Independent of
  * `useLlmPresets` (which manages API config). Decouples prompt switching
  * from API config switching so users can mix-and-match.
  */
-export const usePromptPresets = ({ effectiveSysPrompt, effectiveUserPrompt, setSysPrompt, setUserPrompt }: Deps) => {
-  const [promptPresets, setPromptPresets] = useLocalStorage<PromptPreset[]>("promptPresets", []);
-  const [activePromptPresetId, setActivePromptPresetId] = useLocalStorage<string>("activePromptPresetId", "");
+export const usePromptPresets = ({ effectiveSystemPrompt, effectiveUserPrompt, setSystemPrompt, setUserPrompt }: Deps) => {
+  const {
+    items: promptPresets,
+    setItems: setPromptPresets,
+    activeId: activePromptPresetId,
+    setActiveId: setActivePromptPresetId,
+    add,
+    remove: deletePromptPreset,
+    rename: renamePromptPreset,
+    update,
+  } = usePresetCollection<PromptPreset>("translation-promptPresets", "translation-activePromptPresetId");
 
   const savePromptPreset = (name: string) => {
     const preset: PromptPreset = {
       id: String(Date.now()),
       name,
-      sysPrompt: effectiveSysPrompt,
+      systemPrompt: effectiveSystemPrompt,
       userPrompt: effectiveUserPrompt,
     };
-    setPromptPresets((prev) => [...prev, preset]);
-    setActivePromptPresetId(preset.id);
+    add(preset);
     return preset;
   };
 
@@ -42,28 +55,29 @@ export const usePromptPresets = ({ effectiveSysPrompt, effectiveUserPrompt, setS
       setActivePromptPresetId("");
       return;
     }
+    if (id === DEFAULT_PROMPT_PRESET_ID) {
+      setSystemPrompt(DEFAULT_SYSTEM_PROMPT);
+      setUserPrompt(DEFAULT_USER_PROMPT);
+      setActivePromptPresetId(DEFAULT_PROMPT_PRESET_ID);
+      return;
+    }
     const preset = promptPresets.find((p) => p.id === id);
     if (!preset) return;
-    setSysPrompt(preset.sysPrompt);
+    setSystemPrompt(preset.systemPrompt);
     setUserPrompt(preset.userPrompt);
     setActivePromptPresetId(id);
   };
 
-  const deletePromptPreset = (id: string) => {
-    setPromptPresets((prev) => prev.filter((p) => p.id !== id));
-    if (activePromptPresetId === id) setActivePromptPresetId("");
-  };
-
-  const renamePromptPreset = (id: string, name: string) => {
-    setPromptPresets((prev) => prev.map((p) => (p.id === id ? { ...p, name } : p)));
-  };
-
+  // The default entry is read-only — it can't be overwritten or deleted (the
+  // picker disables those buttons too; these guards are the safety net).
   const updatePromptPreset = (id: string) => {
-    setPromptPresets((prev) =>
-      prev.map((p) =>
-        p.id === id ? { ...p, sysPrompt: effectiveSysPrompt, userPrompt: effectiveUserPrompt } : p,
-      ),
-    );
+    if (id === DEFAULT_PROMPT_PRESET_ID) return;
+    update(id, { systemPrompt: effectiveSystemPrompt, userPrompt: effectiveUserPrompt });
+  };
+
+  const removePromptPreset = (id: string) => {
+    if (id === DEFAULT_PROMPT_PRESET_ID) return;
+    deletePromptPreset(id);
   };
 
   return {
@@ -73,7 +87,7 @@ export const usePromptPresets = ({ effectiveSysPrompt, effectiveUserPrompt, setS
     setActivePromptPresetId,
     savePromptPreset,
     loadPromptPreset,
-    deletePromptPreset,
+    deletePromptPreset: removePromptPreset,
     renamePromptPreset,
     updatePromptPreset,
   };

@@ -37,11 +37,9 @@ const LANGUAGES: readonly Language[] = [
   { key: "it", label: "Italiano" },
 ] as const;
 
-const CHINESE_LANGUAGES: readonly Language[] = LANGUAGES.filter((l) => l.key === "zh" || l.key === "zh-hant");
-
 // ============ 组件 ============
 
-export function LanguageSelector({ chineseOnly = false }: { chineseOnly?: boolean }) {
+export function LanguageSelector() {
   const router = useRouter();
   const pathname = usePathname();
   const locale = useLocale();
@@ -52,18 +50,20 @@ export function LanguageSelector({ chineseOnly = false }: { chineseOnly?: boolea
   const [langOpen, setLangOpen] = useState(false);
   const [langQuery, setLangQuery] = useState("");
 
-  const languages = chineseOnly ? CHINESE_LANGUAGES : LANGUAGES;
-  const currentLanguage = languages.find((l) => l.key === locale)?.label || "English";
+  const currentLanguage = LANGUAGES.find((l) => l.key === locale)?.label || "English";
 
   const filteredLanguages = (() => {
     const q = langQuery.trim().toLowerCase();
-    if (!q) return languages;
-    return languages.filter((l) => l.label.toLowerCase().includes(q) || l.key.toLowerCase().includes(q));
+    if (!q) return LANGUAGES;
+    return LANGUAGES.filter((l) => l.label.toLowerCase().includes(q) || l.key.toLowerCase().includes(q));
   })();
 
   const handleLanguageChange = (key: string) => {
     const newPath = pathname.replace(/^\/[a-z]{2}(-[a-z]+)?/, `/${key}`);
-    router.push(newPath);
+    // usePathname 不含 query/hash —— 不补会在切语言时丢掉 ?huginn 这类
+    // 功能门控参数(data-batch 的效应还会因参数消失把已选工具回写成
+    // excel,localStorage 永久丢失)。点击事件里读 window.location 安全。
+    router.push(`${newPath}${window.location.search}${window.location.hash}`);
   };
 
   const renderLanguageList = () => (
@@ -88,6 +88,7 @@ export function LanguageSelector({ chineseOnly = false }: { chineseOnly?: boolea
                   block
                   size={isMobile ? "middle" : "small"}
                   type={selected ? "primary" : "text"}
+                  aria-current={selected ? "true" : undefined}
                   style={{ justifyContent: "space-between", display: "flex", width: "100%", textAlign: "left" }}
                   onClick={() => {
                     handleLanguageChange(lang.key);
@@ -97,7 +98,7 @@ export function LanguageSelector({ chineseOnly = false }: { chineseOnly?: boolea
                     {lang.label}
                     <span style={{ opacity: 0.7, marginLeft: 6 }}>({lang.key})</span>
                   </span>
-                  {selected && <CheckOutlined />}
+                  {selected && <CheckOutlined aria-hidden />}
                 </Button>
               </Col>
             );

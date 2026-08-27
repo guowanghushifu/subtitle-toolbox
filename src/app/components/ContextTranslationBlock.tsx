@@ -15,9 +15,9 @@ const ContextTranslationBlock = ({ enabled, onEnabledChange, disabled = false }:
   const t = useTranslations("common");
   const tSettings = useTranslations("TranslationSettings");
   const { token } = theme.useToken();
-  const { translationMethod, getCurrentConfig, handleConfigChange } = useTranslationContext();
+  const { translationMethod, getSelectedConfig, handleConfigChange } = useTranslationContext();
 
-  const config = getCurrentConfig();
+  const config = getSelectedConfig();
 
   const handleParamChange = (field: "contextWindow" | "contextBatchSize", fallback: number, value: number | null) => {
     handleConfigChange(translationMethod, field, value ?? fallback);
@@ -32,11 +32,11 @@ const ContextTranslationBlock = ({ enabled, onEnabledChange, disabled = false }:
         padding: token.paddingSM,
         marginBottom: token.marginSM,
       }}>
-      <Flex justify="space-between" align="center">
+      <Flex component="label" className="cursor-pointer" justify="space-between" align="center">
         <Space size="small">
           <BranchesOutlined />
           <Typography.Text strong>{t("contextAwareTranslation")}</Typography.Text>
-          <Tag color="blue">LLM</Tag>
+          <Tag style={{ background: token.colorPrimaryBg, color: token.colorPrimary, borderColor: token.colorPrimaryBorder, margin: 0 }}>LLM</Tag>
         </Space>
         <Switch
           checked={enabled}
@@ -62,6 +62,10 @@ const ContextTranslationBlock = ({ enabled, onEnabledChange, disabled = false }:
                 min={1}
                 max={500}
                 step={1}
+                // precision={0}:step 只约束步进按钮,手输 3.5 照样落进 localStorage。
+                // 小数会让 new Array(20.5) 抛 RangeError(且在请求已计费之后)。
+                // 引擎侧 positiveInt 仍然兜底 —— 那是防历史脏值,这里是关水龙头。
+                precision={0}
                 value={config.contextWindow as number}
                 onChange={(v) => handleParamChange("contextWindow", 100, v)}
                 disabled={disabled}
@@ -76,6 +80,7 @@ const ContextTranslationBlock = ({ enabled, onEnabledChange, disabled = false }:
                 min={1}
                 max={50}
                 step={1}
+                precision={0}
                 value={config.contextBatchSize as number}
                 onChange={(v) => handleParamChange("contextBatchSize", 3, v)}
                 disabled={disabled}

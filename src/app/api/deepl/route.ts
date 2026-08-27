@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as deepl from "deepl-node";
 
-// 1. 定义请求体的接口，避免使用 any
 interface TranslationRequest {
   text: string;
   source_lang?: string;
@@ -10,78 +9,95 @@ interface TranslationRequest {
   tag_handling?: "html" | "xml";
 }
 
+// DeepL 弃用了无地区的 en/pt,默认补成 en-US / pt-BR 兼容老客户端。
 const TARGET_LANG_MAPPING: Record<string, string> = {
-  en: "en-US", // 默认英语使用美式英语
-  pt: "pt-BR", // 默认葡萄牙语使用巴西葡萄牙语
+  en: "en-US",
+  pt: "pt-BR",
 };
 
-// 默认重试 5 次，连接超时 60s
+// 默认重试 5 次,连接超时 60s。
 const options = { maxRetries: 5, minTimeout: 60000 };
 
 export async function POST(req: NextRequest) {
+  let body: TranslationRequest;
   try {
-    // 2. 安全地解析 JSON 并断言为我们定义的接口
-    // 先转为 unknown 再转为接口是更安全的做法，或者直接断言
-    const body = (await req.json()) as TranslationRequest;
+    body = (await req.json()) as TranslationRequest;
+  } catch {
+    // Must not fall through to the generic 500 below — the browser client's
+    // isRetryableError retries every 5xx three times, and a body that failed to
+    // parse fails identically on each attempt.
+    return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 });
+  }
+
+  try {
     const { text, source_lang, target_lang: rawTargetLang, authKey, tag_handling } = body;
 
-    // 验证请求参数
-    if (!text || !rawTargetLang) {
-      return NextResponse.json({ error: "Missing required parameters: text and target_lang are required" }, { status: 400 });
+    if (typeof text !== "string" || !text || typeof rawTargetLang !== "string" || !rawTargetLang) {
+      return NextResponse.json({ error: "Missing or invalid parameters: text and target_lang must be non-empty strings" }, { status: 400 });
+    }
+    if (typeof authKey !== "string" || !authKey) {
+      return NextResponse.json({ error: "Missing or invalid parameter: authKey must be a non-empty string" }, { status: 400 });
     }
 
-    // 验证 API 密钥
-    if (!authKey) {
-      return NextResponse.json({ error: "Missing required parameter: authKey is required" }, { status: 400 });
-    }
-
-    // 目标语言：处理弃用的语言代码
     const target_lang = TARGET_LANG_MAPPING[rawTargetLang] || rawTargetLang;
-
-    // 初始化 DeepL 翻译器
     const translator = new deepl.Translator(authKey, options);
 
-    // 调用 DeepL API 进行翻译
-    // 注意：这里可能需要根据 deepl-node 的类型定义进行简单的类型断言，或者保持 string
     const result = await translator.translateText(
       text,
-      (source_lang as deepl.SourceLanguageCode) || null, // 如果未提供源语言，则为自动检测
+      (source_lang as deepl.SourceLanguageCode) || null, // null = auto-detect
       target_lang as deepl.TargetLanguageCode,
       tag_handling ? { tagHandling: tag_handling } : undefined,
     );
 
-    // 返回翻译结果
+    // translateText's return type is `T extends string ? TextResult : TextResult[]`
+    // — the array overload only fires for array input, which the string-type gate
+    // above rejects. So `result` is always a single TextResult here.
     return NextResponse.json({
-      translations: Array.isArray(result)
-        ? result.map((item) => ({
-            detected_source_language: item.detectedSourceLang,
-            text: item.text,
-          }))
-        : [
-            {
-              detected_source_language: result.detectedSourceLang,
-              text: result.text,
-            },
-          ],
+      translations: [
+        {
+          detected_source_language: result.detectedSourceLang,
+          text: result.text,
+        },
+      ],
     });
   } catch (error: unknown) {
     console.error("DeepL translation error:", error);
 
-    // 3. 使用 instanceof 检查 DeepL 特定的错误
-    if (error instanceof deepl.DeepLError && (error.message.includes("is deprecated") || error.message.includes("not supported"))) {
-      const errorMsg = error.message;
-      return NextResponse.json(
-        {
-          error: `DeepL API error: ${errorMsg}`,
-          suggestion: "请更新您的语言代码。例如，使用'en-US'或'en-GB'代替'en'，使用'pt-BR'或'pt-PT'代替'pt'。",
-        },
-        { status: 400 },
-      );
-    }
-
-    // 处理可能的其他 API 错误
+    // The deepl-node SDK signals fault class via the thrown error type rather
+    // than an HTTP status field (see translator.ts#checkStatusCode). Map each
+    // class to the status DeepL itself returned so the browser client's
+    // isRetryableError treats client-class faults (auth/quota/bad-request) as
+    // fast-fail instead of retrying them 3× as if they were 5xx.
     if (error instanceof deepl.DeepLError) {
-      return NextResponse.json({ error: `DeepL API error: ${error.message}` }, { status: 500 });
+      // Unsupported / deprecated language code — actionable client error.
+      if (error.message.includes("is deprecated") || error.message.includes("not supported")) {
+        return NextResponse.json(
+          {
+            error: `DeepL API error: ${error.message}`,
+            suggestion: "Please update your language code — e.g. use 'en-US'/'en-GB' instead of 'en', or 'pt-BR'/'pt-PT' instead of 'pt'. / 请更新您的语言代码。例如，使用'en-US'或'en-GB'代替'en'，使用'pt-BR'或'pt-PT'代替'pt'。",
+          },
+          { status: 400 },
+        );
+      }
+
+      let status = 500;
+      if (error instanceof deepl.AuthorizationError) {
+        status = 403; // invalid auth key
+      } else if (error instanceof deepl.QuotaExceededError) {
+        status = 456; // billing quota exhausted
+      } else if (error instanceof deepl.TooManyRequestsError) {
+        status = 429; // rate limited
+      } else if (error instanceof deepl.ArgumentError) {
+        status = 400; // bad client input
+      } else if (error instanceof deepl.ConnectionError) {
+        status = 502; // upstream/network failure reaching DeepL
+      } else if (error.message.includes("Bad request") || error.message.includes("Not found")) {
+        // Plain DeepLError text from 400/404 — still client-class.
+        status = error.message.includes("Not found") ? 404 : 400;
+      }
+      // else: service-unavailable / unexpected status → genuine 5xx → 500
+
+      return NextResponse.json({ error: `DeepL API error: ${error.message}` }, { status });
     }
 
     let errorMessage = "An unknown error occurred";

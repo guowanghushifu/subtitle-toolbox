@@ -1,0 +1,337 @@
+// Context-aware translation helpers for LLM-based subtitle translation
+
+// Pre-compiled regex for marker cleanup (avoids creating RegExp objects per call).
+// `TRANSLTranslate_\d+` looks like a typo but isn't — some LLMs occasionally
+// emit closing tags as `[/TRANSLTranslate_5]` instead of `[/TRANSLATE_5]`
+// (the model's tokenizer re-case-shifts mid-token). Match the malformed form
+// so extraction recovers instead of leaving the line empty for retry.
+const MARKER_CLEANUP_RE = /\[\/?(TRANSLATE(_\d+)?|TRANSLTranslate_\d+|CONTEXT)\]/gi;
+
+/**
+ * Clean translation content by removing markers
+ */
+export const cleanTranslatedContent = (content: string): string => {
+  return content.replace(MARKER_CLEANUP_RE, "").trim();
+};
+
+// Zero-width / invisible characters that String.trim() does NOT remove (they're
+// Unicode format chars, not WhiteSpace) but that render as a blank line: ZWSP
+// (U+200B — a common SRT trick to force visually-empty cues), ZWNJ, ZWJ, word
+// joiner, BOM/ZWNBSP. A line of only these must be treated as blank everywhere
+// blankness matters (pre-fill + merge-guard blankSource) — otherwise it becomes
+// a "real target" the model can only answer with an empty tag, and the merge
+// guard would discard its innocent predecessor on EVERY retry round, never
+// converging.
+const INVISIBLE_BLANK_RE = /[\u200B\u200C\u200D\u2060\uFEFF]/g;
+
+/** True when the line is empty / whitespace-only / invisible-unicode-only. */
+export const isBlankLine = (line: string | undefined): boolean => !(line ?? "").replace(INVISIBLE_BLANK_RE, "").trim();
+
+/**
+ * Cross-run skip: pre-fill lines that already have a per-line cache hit so a
+ * re-run ("再来一次") only re-translates the still-missing lines instead of
+ * re-rolling the whole batch. (Context mode caches per BATCH; when a batch had
+ * any failed line its batch entry is purged — issue#44 — so without a per-line
+ * cache the next run re-translates every line in that batch, including the ones
+ * that had succeeded.) Mutates `translatedLines` in place, write-once: only a
+ * still-`undefined` slot whose source line is non-blank can be filled, so blank
+ * pre-fills and already-decided slots are never clobbered. `cacheGetMany` reads
+ * the cached translations for a batch of source lines IN ONE transaction
+ * (result order matches input; null = miss) — a rejected batch lookup is
+ * treated as all-miss so those lines just translate normally. Reading all
+ * lookups through one transaction (vs one `get` per line) is what keeps a
+ * cache-heavy re-run of a long file from paying per-line IndexedDB overhead.
+ */
+export const prefillFromLineCache = async (
+  contentLines: string[],
+  translatedLines: (string | undefined)[],
+  cacheGetMany: (texts: string[]) => Promise<(string | null)[]>,
+  /**
+   * 命中项落盘【前】的加工。必须传术语表 enforcement:同一批缓存键里混着两种
+   * 内容 —— 上下文路径存的是已 enforce 的成品,而 translateCore(逐行/chunk
+   * 路径)存的是【服务原始输出】。其它读路径都在读之后再 enforce 一遍抹平这个
+   * 差异,回填若直接装配原始值,用户只要在两次运行之间切过上下文开关(或在
+   * MT 与 LLM 之间换过 provider),已缓存的那些行就会静默地不再受术语表约束
+   * —— 同一份文件里一部分行生效一部分不生效,零请求零报错。
+   * 对已 enforce 的条目再跑一次是无害的(leak-through 幂等)。
+   *
+   * ⚠ 【必须是同步纯函数】。曾经传的是整个 enforceGlossaryOnLine,它在检出错译时
+   * 会发一次严格重译请求 —— 放在这个 for-await 循环里就是逐条串行、不过 pLimit、
+   * 且全部发生在第一次 updateProgress 之前:一份缓存齐全的长文件会卡在 0% 好几
+   * 分钟,把「缓存即断点 / 瞬间回放」这条承诺直接打碎。而当初要修的那个 bug
+   * (缓存回填绕过术语表)复现出来的是 leak-through 没生效,跟严格重试无关。
+   * 缓存命中的行拿到的是「上一轮已经付过费的译文」,给它补上纯替换即可;
+   * 真要重译,那是下一次非缓存运行的事。
+   */
+  postProcess?: (source: string, cached: string) => string,
+): Promise<void> => {
+  // Only non-blank, still-undefined slots are lookup candidates (write-once).
+  const pending: number[] = [];
+  for (let i = 0; i < contentLines.length; i++) {
+    if (translatedLines[i] === undefined && !isBlankLine(contentLines[i])) pending.push(i);
+  }
+  if (pending.length === 0) return;
+
+  let hits: (string | null)[];
+  try {
+    hits = await cacheGetMany(pending.map((i) => contentLines[i]));
+  } catch {
+    return; // treat a failed batch lookup as all-miss — the lines translate normally
+  }
+
+  for (let p = 0; p < pending.length; p++) {
+    const hit = hits[p];
+    // Re-check write-once: a concurrent path can't touch translatedLines here
+    // (single-threaded), but the guard documents intent and is cheap.
+    // 判据是 truthy 而非 `!= null` —— 与 translateCore 的 `if (cachedTranslation)`
+    // 【必须一致】。空串曾在这里算命中:同一个键在逐行/chunk 路径上被判未命中
+    // 而重译,在上下文路径上却被写进 translatedLines,而引擎把「槽位有值」定义
+    // 为已完成 —— 那一行以空字幕 cue / 消失的 Markdown 段落出货,却计入 100%
+    // 进度、零失败、exit 0。同一份文件仅因上下文开关而产出不同结果。
+    // (空串怎么进的缓存:CLI 的缓存是可手工编辑的 JSON,并发写也可能截断。)
+    if (hit && translatedLines[pending[p]] === undefined) {
+      translatedLines[pending[p]] = postProcess ? postProcess(contentLines[pending[p]], hit) : hit;
+    }
+  }
+};
+
+/**
+ * Single pre-compiled regex matches every `[TRANSLATE_N]…[/TRANSLATE_N]` (and
+ * the `TRANSLTranslate` typo variant — see MARKER_CLEANUP_RE) in one pass.
+ * Previously this used `new RegExp(...)` inside a loop of `expectedCount`
+ * iterations: a 1000-line subtitle at batchSize=50 allocated 1000 RegExp
+ * objects across the run. Now one shared instance handles all batches.
+ *
+ * Capture groups:
+ *   $1 — line number (matched against expectedCount to bucket into results)
+ *   $2 — translated content
+ */
+// 闭合标签的编号用 \1 回引锁定与开标签一致:源文本里字面出现的外来闭合标签
+// (教程行 "Use [/TRANSLATE_2] to close")编号对不上,不会提前终结惰性匹配
+// 把译文截断成功提交;编号错位的闭合标签按提取失败走重试(fail-safe 方向)。
+const NUMBERED_TRANSLATE_RE = /\[TRANSLATE_(\d+)\]([\s\S]*?)\[\/(?:TRANSLATE|TRANSLTranslate)_\1\]/gi;
+
+/**
+ * Extract translated lines with numbered markers from AI response
+ *
+ * `sourceLines` (the batch's source slice, parallel to the slots) lets the merge
+ * guard below distinguish "model failed to translate this line" from "this line
+ * was never a translation target". Omitting it assumes every slot is a real
+ * target (legacy behavior — fine for callers that pre-filter blank lines).
+ */
+export const extractTranslatedLinesWithNumbers = (response: string, expectedCount: number, sourceLines?: string[], contextLines?: string[]): string[] => {
+  // Initialize with empty strings to ensure consistent return type
+  const results = new Array<string>(expectedCount).fill("");
+
+  // Single-pass scan: walk every `[TRANSLATE_N]...[/TRANSLATE_N]` match and
+  // bucket by the captured N. Out-of-range numbers (LLM hallucinated extras)
+  // are silently dropped — caller's retry logic handles still-empty slots.
+  NUMBERED_TRANSLATE_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let sawOneBasedOverflow = false;
+  while ((match = NUMBERED_TRANSLATE_RE.exec(response)) !== null) {
+    const idx = Number(match[1]);
+    if (idx >= 0 && idx < expectedCount && !results[idx]) {
+      results[idx] = cleanTranslatedContent(match[2].trim());
+    } else if (idx === expectedCount) {
+      sawOneBasedOverflow = true;
+    }
+  }
+
+  // 1-based renumbering fail-safe: a tag numbered exactly expectedCount (one
+  // past the last valid index) TOGETHER WITH an empty slot 0 is the signature
+  // of the classic LLM habit of numbering 1..N instead of the requested
+  // 0..N-1. Trusting those tags would ship EVERY line shifted one position
+  // against its timestamp — silently, flagged as success, and cached. Reject
+  // the response wholesale and let the retry machinery re-roll (same fail-safe
+  // philosophy as the no-positional-guess rule below). A hallucinated tag N on
+  // an otherwise-correct response whose slot 0 is missing for unrelated
+  // reasons also lands here — rejecting costs one retry, the safe direction.
+  if (expectedCount > 1 && sawOneBasedOverflow && results[0] === "") {
+    return new Array<string>(expectedCount).fill("");
+  }
+
+  // Merge guard (subtitle-translator#44): a marker immediately PRECEDING a missing
+  // slot is untrusted and discarded too. When subtitle lines are fragments of one
+  // sentence, Gemini routinely stuffs the WHOLE sentence's translation into the
+  // first line's tag and omits (or leaves empty) the following tags. Keeping that
+  // merged content while the retry machinery re-translates the omitted lines
+  // individually duplicates the sentence in the output — line N ends up holding
+  // N..N+k's content AND N+1..N+k get their own translations again. Discarding the
+  // gap-adjacent predecessor makes the whole sentence retry together as one cluster.
+  //
+  // "Missing" means an empty slot whose SOURCE actually had content. Blank source
+  // lines (markdown paragraph separators in raw mode, ASS tag-only lines stripped
+  // to "") can only ever come back empty — treating them as gaps would discard the
+  // legitimate translation before EVERY blank line on EVERY retry round, until the
+  // line permanently falls back to source text.
+  //
+  // Costs accepted: a benign single-line drop or a token-limit truncation tail now
+  // re-translates ONE extra (innocent) neighbor line per gap — cheap, and correct
+  // output beats saved tokens (same philosophy as the no-positional-guess rule
+  // below). Works off a snapshot so the discard never cascades backwards; the
+  // happy path (all markers present) is untouched.
+  // isBlankLine (not bare .trim()) so invisible-unicode-only lines (ZWSP etc.)
+  // count as blank here exactly like they do in the caller's pre-fill — a
+  // definition mismatch would make them permanent "real targets" whose
+  // inevitable empty answer kills the predecessor on every retry round.
+  const blankSource = (i: number): boolean => sourceLines !== undefined && isBlankLine(sourceLines[i] ?? "x");
+  const satisfied = results.map((r, i) => r !== "" || blankSource(i));
+  for (let i = 1; i < expectedCount; i++) {
+    if (satisfied[i]) continue;
+    // Walk back across blank-source slots: a stripped ASS tag-only line can sit
+    // MID-sentence, so the merged content may live in the nearest CONTENT slot
+    // before the gap, not the literally adjacent (blank) one. Without the walk,
+    // the blank slot "satisfies" the adjacency check and shields the merge.
+    let j = i - 1;
+    while (j >= 0 && blankSource(j)) j--;
+    if (j >= 0 && satisfied[j]) results[j] = "";
+  }
+
+  // Cross-line echo guard (NHK 红白 issue): in dense rapid-dialogue regions the
+  // model loses the [TRANSLATE]/[CONTEXT] boundary and copies a NEARBY source line
+  // (observed: the forward-context line ≈+9 ahead) VERBATIM into a TRANSLATE slot,
+  // untranslated. Because every slot comes back non-empty, extraction would count
+  // it a success — the misaligned source text gets cached and shipped, never
+  // retried. A real JP→ZH (or any cross-language) translation is never
+  // byte-identical to a DIFFERENT line's source, so a slot whose content equals
+  // ANOTHER source/context line in this batch's window is an echo: nuke it to ""
+  // so it falls into the caller's retry/soft-fill. `contextLines` is the full
+  // window the model saw (target slice + padding) so echoes of forward-CONTEXT
+  // lines outside the target batch are caught too; falls back to `sourceLines`.
+  //
+  // Runs AFTER the merge guard ON PURPOSE: nuking here must not feed the merge
+  // guard's gap-predecessor discard. An ISOLATED echo (one slot copies a
+  // neighbor; its predecessor is a GOOD translation) would otherwise turn into a
+  // gap whose innocent predecessor gets discarded too — blanking a correctly
+  // translated line. The merge guard already ran on the echo-present results
+  // (sees the echo as a non-empty "satisfied" slot, not an omission), so by the
+  // time we empty the echo here, no predecessor can be collaterally dropped.
+  //
+  // Strictly "a DIFFERENT line": content equal to the slot's OWN source is the
+  // legitimate self-translation of an untranslatable token (names, numbers, pure
+  // punctuation) and must survive. A source text the model also returned AT ITS
+  // OWN slot is whitelisted (proven-plausible target string — e.g. JP "はい" →
+  // "Yes" in a mixed-language subtitle whose line 0 is already English "Yes" —
+  // not copied source). Blank window lines are excluded so an empty slot can't
+  // spuriously "match" them.
+  const echoWindow = contextLines ?? sourceLines;
+  if (echoWindow !== undefined) {
+    const echoSet = new Set(echoWindow.map((l) => (l ?? "").trim()).filter((l) => l !== ""));
+    const selfTranslated = new Set<string>();
+    for (let i = 0; i < expectedCount; i++) {
+      const c = results[i].trim();
+      if (c !== "" && c === (sourceLines?.[i] ?? "").trim()) selfTranslated.add(c);
+    }
+    for (let i = 0; i < expectedCount; i++) {
+      const content = results[i].trim();
+      if (content === "" || content === (sourceLines?.[i] ?? "").trim()) continue;
+      if (echoSet.has(content) && !selfTranslated.has(content)) results[i] = "";
+    }
+  }
+
+  // Fail safe, not wrong: every returned line is placed at the index named by its
+  // [TRANSLATE_N] marker, so reordered-but-tagged output still maps correctly. When
+  // NO marker parses (the LLM — Gemini especially — stripped the tags, wrapped the
+  // reply in a code fence, or added a preamble), we must NOT guess by line position:
+  // a positional split silently misaligns subtitles against their timestamps whenever
+  // the model reorders lines or changes the line count. Returning empties instead lets
+  // the caller's retry (window-halving, cluster retry, 10s auto-retry) and final
+  // soft-fill-with-original kick in — a line left untranslated at the CORRECT timestamp
+  // beats a translation at the wrong one.
+  return results;
+};
+
+/**
+ * Build context-aware translation prompt — wraps the batch instructions around
+ * the user's template WITHOUT consuming the ${content} placeholder: the marker
+ * block (user-controlled text) is inserted LAST by getAIModelPrompt's
+ * function-form replacement at the service layer. Embedding it here would (a)
+ * run it through String.replace's GetSubstitution ($$ → $, LaTeX corruption)
+ * and (b) expose it to the service layer's template-variable pass (a literal
+ * "${fullText}" inside a subtitle line would inject the whole document).
+ * @param baseUserPrompt - Base user prompt template with ${content} placeholder
+ * @param batchSize - Number of lines to translate in this batch
+ * @param documentType - Type of document: 'subtitle' | 'markdown' | 'generic'
+ */
+const CONTEXT_DESCRIPTIONS = {
+  subtitle: {
+    description: "part of a subtitle file",
+    style: "Maintain the natural flow of dialogue and keep the same numbering in your response.",
+    notes: "If a line contains only sounds/exclamations, still translate them appropriately",
+  },
+  markdown: {
+    description: "part of a Markdown document",
+    style: "Preserve ALL Markdown formatting syntax exactly as-is (**, *, [], (), #, >, -, ```, etc.). Only translate the text content, never modify the Markdown syntax or structure.",
+    notes: "URLs, code blocks, and LaTeX formulas must remain unchanged. Maintain paragraph coherence across lines",
+  },
+  generic: {
+    description: "part of a text document",
+    style: "Maintain consistency, natural language flow, and preserve the original text formatting (line breaks, spacing, punctuation style).",
+    notes: "Keep the original paragraph structure and any special formatting patterns",
+  },
+} as const;
+
+/**
+ * 「相邻同译」检测(subtitle-translator#44 的残余形态):模型把两行译成同一句、
+ * 且【补齐了各自的标记】—— 块数正确、没有缺口,提取层四道守卫全部放行,是唯一
+ * 一种此前完全无检查的静默损坏。
+ *
+ * ⚠ 本函数【只做触发器,不做裁决】。上次撤销的方案(trans[j] 字面包含
+ * trans[j+1])错在拿启发式直接清槽 —— 短对白误杀率极高,丢的是内容。这里的
+ * 判据故意窄得多(相邻 + 完全相等 + 源文不同),且命中后 pipeline 只做一件事:
+ * 对涉事各行发【独立单行请求】重译,用复译结果覆盖。合并在单行请求里物理上
+ * 不可能;合法同译(源文 "Yeah."/"Yes." 都译成"是的。")复译后得到同样的结果,
+ * 内容一字不动 —— 误报的最坏代价是几个多余请求,永远不是丢内容。
+ * 【包含检测仍然禁止】,别把这个函数往那个方向扩。
+ *
+ * 判据(全部满足才算):
+ *   - 相邻两槽译文非空且 trim 后完全相等(合并天然发生在相邻行)
+ *   - 两行源文都非空白、且 trim 后不同(歌词重复行源文相同,天然排除;
+ *     源文相同 → 同译是正确输出)
+ * 连续 3+ 槽同译按同一簇全部纳入。返回去重升序的槽位下标。
+ */
+export const findAdjacentDuplicateSlots = (results: readonly string[], sourceLines: readonly string[]): number[] => {
+  const hit = new Set<number>();
+  for (let j = 0; j + 1 < results.length; j++) {
+    const a = (results[j] ?? "").trim();
+    const b = (results[j + 1] ?? "").trim();
+    if (a === "" || a !== b) continue;
+    const sa = (sourceLines[j] ?? "").trim();
+    const sb = (sourceLines[j + 1] ?? "").trim();
+    if (isBlankLine(sa) || isBlankLine(sb) || sa === sb) continue;
+    hit.add(j);
+    hit.add(j + 1);
+  }
+  return [...hit].sort((x, y) => x - y);
+};
+
+export const buildContextPrompt = (baseUserPrompt: string, batchSize: number, documentType: "subtitle" | "markdown" | "generic" = "subtitle"): string => {
+  const ctx = CONTEXT_DESCRIPTIONS[documentType];
+
+  // Function-form replacement + the trailing literal ${content}: the actual
+  // marker block is substituted by getAIModelPrompt LAST, after every template
+  // variable has already been resolved (see utils.ts getAIModelPrompt).
+  //
+  // The format example below uses the literal X placeholder, NOT a concrete
+  // digit. A digit (e.g. `[TRANSLATE_0]translation[/TRANSLATE_0]`) is parseable by
+// NUMBERED_TRANSLATE_RE: a model that echoes the format example (acknowledged
+  // "模型回显残渣") would have that echo win slot 0 under the first-wins rule,
+  // shipping the literal word "translation" on line 0 — flagged success + cached.
+  // `[TRANSLATE_X]` can't match `\d+`, so an echo is inert. Keep it non-numeric.
+  return baseUserPrompt.replace(
+    "${content}",
+    () => `Context: This is ${
+      ctx.description
+    }. Only translate the lines marked with [TRANSLATE_X][/TRANSLATE_X] tags (where X is the line number). Use the [CONTEXT][/CONTEXT] lines for understanding but do not translate them. ${ctx.style}
+
+CRITICAL REQUIREMENTS:
+1. You MUST translate ALL ${batchSize} lines marked with [TRANSLATE_X] tags
+2. Do NOT skip any numbers from 0 to ${batchSize - 1}
+3. Keep the exact format: [TRANSLATE_X]translation[/TRANSLATE_X] (X = the line number)
+4. NEVER merge lines: when one sentence spans several marked lines, translate each line's fragment separately under its own number — do NOT combine multiple lines' content into a single tag; a tag may be empty ONLY if its source line is empty
+5. ${ctx.notes}
+
+\${content}`
+  );
+};

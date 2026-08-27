@@ -7,18 +7,29 @@ interface NvidiaRequest {
   temperature?: number;
   top_p?: number;
   chat_template_kwargs?: Record<string, unknown>;
-  reasoning_effort?: string;
 }
 
 const NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 
 export async function POST(req: NextRequest) {
+  let body: NvidiaRequest;
   try {
-    const body = (await req.json()) as NvidiaRequest;
-    const { apiKey, messages, model, temperature, top_p, chat_template_kwargs, reasoning_effort } = body;
+    body = (await req.json()) as NvidiaRequest;
+  } catch {
+    // Must not fall through to the generic 500 below — the browser client's
+    // isRetryableError retries every 5xx three times, and a body that failed to
+    // parse fails identically on each attempt.
+    return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 });
+  }
 
-    if (!messages || !Array.isArray(messages)) {
-      return NextResponse.json({ error: "Missing required parameter: messages" }, { status: 400 });
+  try {
+    const { apiKey, messages, model, temperature, top_p, chat_template_kwargs } = body;
+
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return NextResponse.json({ error: "Missing or invalid parameter: messages must be a non-empty array" }, { status: 400 });
+    }
+    if (typeof model !== "string" || !model) {
+      return NextResponse.json({ error: "Missing or invalid parameter: model must be a non-empty string" }, { status: 400 });
     }
 
     const headers: Record<string, string> = {
@@ -37,12 +48,17 @@ export async function POST(req: NextRequest) {
     if (temperature !== undefined) requestBody.temperature = temperature;
     if (top_p !== undefined) requestBody.top_p = top_p;
     if (chat_template_kwargs !== undefined) requestBody.chat_template_kwargs = chat_template_kwargs;
-    if (reasoning_effort !== undefined) requestBody.reasoning_effort = reasoning_effort;
 
+    // Forward the incoming request's abort signal: when the browser gives up
+    // (per-request timeout in useTranslationState, or the user cancels), Next
+    // aborts req.signal and this cancels the upstream NIM call too. Without it
+    // the standalone/Docker server keeps a dangling connection to NVIDIA long
+    // after nobody is waiting for the answer.
     const response = await fetch(NVIDIA_API_URL, {
       method: "POST",
       headers,
       body: JSON.stringify(requestBody),
+      signal: req.signal,
     });
 
     // Get response as text first to handle non-JSON responses
@@ -68,20 +84,41 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(data, { status: response.status });
     }
 
-    if (data.choices?.[0]?.message?.content) {
-      const isMinimax = model.toLowerCase().includes("minimax-m2");
+    // A 200 with no message content is a malformed upstream response — surface
+    // it as a 502 (mirroring the non-JSON branch) instead of returning an empty
+    // body the client would silently treat as a successful but blank translation.
+    if (!data.choices?.[0]?.message?.content) {
+      console.error("Nvidia API returned 200 with no message content:", JSON.stringify(data).substring(0, 500));
+      return NextResponse.json({ error: "Nvidia API returned a response with no message content." }, { status: 502 });
+    }
 
-      if (isMinimax) {
-        let content = data.choices[0].message.content;
-        // Strip <think>...</think> tags and everything inside them
-        // Use a non-greedy regex to match correctly if multiple tags exist
-        content = content.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
-        data.choices[0].message.content = content;
+    // MiniMax models force-output `<think>...</think>` regardless of
+    // reasoning toggle — strip across the whole family (M2, M2.7, M3, …)
+    // rather than pinning to one version. Other providers only emit think
+    // tags when the user explicitly enables thinking, so we leave their
+    // output alone to respect intent.
+    // model is guaranteed string after the validation gate above
+    if (model.toLowerCase().includes("minimax")) {
+      // Strip <think>...</think> tags and everything inside them.
+      // Non-greedy regex matches correctly when multiple tags exist.
+      data.choices[0].message.content = data.choices[0].message.content.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+      // 内容只剩 <think> 块时剥完为空 —— 正是上面 502 闸门要拦的"成功但空白
+      // 翻译",必须复检(短输入下 MiniMax 偶发只回思考块)。
+      if (!data.choices[0].message.content) {
+        console.error("Nvidia API returned only a <think> block (empty after strip).");
+        return NextResponse.json({ error: "Nvidia API returned a response with no message content." }, { status: 502 });
       }
     }
 
     return NextResponse.json(data);
   } catch (error: unknown) {
+    // Client walked away (cancel button / per-request timeout) — the abort we
+    // forwarded above surfaces here. Nobody is reading the response, so log
+    // nothing: users cancel routinely and this would flood a self-hoster's logs.
+    if (req.signal.aborted) {
+      return NextResponse.json({ error: "Request aborted by client" }, { status: 499 });
+    }
+
     console.error("Nvidia proxy error:", error);
 
     let errorMessage = "An unknown error occurred";

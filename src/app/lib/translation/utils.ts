@@ -1,31 +1,20 @@
-// Translation utility functions
-
 import { languages, isMethodSupportedForLanguage, REQUIRES_EXPLICIT_SOURCE } from "./languages-data";
+import { findMethodLabel } from "./registry";
 import type { TranslationMethod } from "./types";
 
 // Pre-computed lookup maps for O(1) language access
 const languageNameMap = new Map(languages.map((lang) => [lang.value, lang.name]));
 const validLanguageCodes = new Set(languages.map((lang) => lang.value));
 
-/**
- * Get language name from language code (O(1) Map lookup)
- */
 export const getLanguageName = (value: string): string => {
   return languageNameMap.get(value) ?? value;
 };
 
-/**
- * Check if a value is a valid language code
- */
 export const isValidLanguageValue = (testValue: string): boolean => {
   return validLanguageCodes.has(testValue);
 };
 
-/**
- * Check if a translation method supports the given source and target languages
- */
-
-export const checkLanguageSupport = (translationMethod: TranslationMethod, sourceLanguage: string, targetLanguage: string): { supported: boolean; errorMessage?: string; preserveMethod?: boolean } => {
+export const checkLanguageSupport = (translationMethod: TranslationMethod, sourceLanguage: string, targetLanguage: string): { supported: boolean; errorMessage?: string } => {
   const sourceName = languageNameMap.get(sourceLanguage);
   const targetName = languageNameMap.get(targetLanguage);
 
@@ -33,29 +22,30 @@ export const checkLanguageSupport = (translationMethod: TranslationMethod, sourc
     return { supported: false, errorMessage: "Invalid language code provided" };
   }
 
+  // Curated display name ("TranslateGemma", "Qwen-MT", …) — never the raw
+  // uppercased internal key ("TRANSLATEGEMMA", "QWENMT") in user-facing copy.
+  const methodLabel = findMethodLabel(translationMethod);
+
   // Methods that need explicit source (no auto-detect mode in the model). Keep
   // this check ahead of UNSUPPORTED_LANGS so the user sees a fix-the-source
   // hint instead of the misleading "doesn't support Auto" wording.
-  // preserveMethod=true so the caller doesn't switch to the fallback service —
-  // the user picked this method on purpose, they just need to fix the source.
   if (sourceLanguage === "auto" && REQUIRES_EXPLICIT_SOURCE.has(translationMethod)) {
     return {
       supported: false,
-      preserveMethod: true,
-      errorMessage: `${translationMethod.toUpperCase()} requires an explicit source language (no auto-detect). Please select a specific source language. / ${translationMethod.toUpperCase()} 不支持自动检测源语言，请明确选择一个源语言。`,
+      errorMessage: `${methodLabel} requires an explicit source language (no auto-detect). Please select a specific source language. / ${methodLabel} 不支持自动检测源语言，请明确选择一个源语言。`,
     };
   }
 
   if (!isMethodSupportedForLanguage(translationMethod, sourceLanguage)) {
     return {
       supported: false,
-      errorMessage: `${translationMethod.toUpperCase()} doesn't support ${sourceName}. Switching to free GTX API now.`,
+      errorMessage: `${methodLabel} doesn't support ${sourceName}. Please pick another language or translation method.`,
     };
   }
   if (!isMethodSupportedForLanguage(translationMethod, targetLanguage)) {
     return {
       supported: false,
-      errorMessage: `${translationMethod.toUpperCase()} doesn't support ${targetName}. Switching to free GTX API now.`,
+      errorMessage: `${methodLabel} doesn't support ${targetName}. Please pick another language or translation method.`,
     };
   }
 
@@ -91,6 +81,21 @@ export const splitTextIntoChunks = (text: string, maxLength: number, delimiter: 
 /**
  * Build AI model prompt with variable substitution
  * @param fullText - Optional: complete text for ${fullText} variable (only processed when prompt contains ${fullText})
+ *
+ * Two invariants here are load-bearing (both shipped corrupted output before):
+ *
+ * 1. SUBSTITUTION ORDER — every template variable resolves BEFORE ${content}
+ *    is inserted, so tokens occurring literally inside user content are never
+ *    treated as variables. Previously a doc line containing `${fullText}`
+ *    injected the entire document into its own position (token blowup →
+ *    context-length failure), and `${targetLanguage}` inside content was
+ *    silently rewritten to a language name before translation.
+ *
+ * 2. FUNCTION-FORM REPLACEMENTS for user-controlled values — a string passed
+ *    as `.replace`/`.replaceAll`'s second arg undergoes GetSubstitution:
+ *    `$$` collapses to `$` (LaTeX `$$E=mc^2$$` → `$E=mc^2$`), `$'` deletes
+ *    itself + swallows context, $` duplicates the preceding text, `$&`
+ *    re-injects the match. `() => value` is inserted verbatim.
  */
 export const getAIModelPrompt = (content: string, userPrompt: string, targetLanguage: string, sourceLanguage: string, fullText?: string): string => {
   let prompt = userPrompt;
@@ -98,19 +103,18 @@ export const getAIModelPrompt = (content: string, userPrompt: string, targetLang
     prompt = prompt.replace(/from \${sourceLanguage} (to|into)/g, "into");
   }
 
-  const vars: Record<string, string> = {
-    "${sourceLanguage}": getLanguageName(sourceLanguage),
-    "${targetLanguage}": getLanguageName(targetLanguage),
-    "${content}": content,
-  };
+  prompt = prompt.replaceAll("${sourceLanguage}", getLanguageName(sourceLanguage));
+  prompt = prompt.replaceAll("${targetLanguage}", getLanguageName(targetLanguage));
+  // ${fullText} gate checked BEFORE content insertion — only the user's own
+  // template can opt in, never a literal token inside the document body.
+  // ${fullText} 与 ${content} 必须【单趟】替换:先插全文再扫 ${content} 会把
+  // 文档正文里的字面 ${content}(讲模板/提示词的文档)当变量展开 —— 当前
+  // 待译块被拼进上下文,且坏 prompt 的产出会进缓存(违反不变量 #1)。
   if (prompt.includes("${fullText}")) {
-    vars["${fullText}"] = fullText || content;
+    const full = fullText || content;
+    return prompt.replace(/\$\{(?:fullText|content)\}/g, (m) => (m === "${fullText}" ? full : content));
   }
-
-  for (const [key, value] of Object.entries(vars)) {
-    prompt = prompt.replaceAll(key, value);
-  }
-  return prompt;
+  return prompt.replaceAll("${content}", () => content);
 };
 
 /**
