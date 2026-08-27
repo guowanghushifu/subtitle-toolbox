@@ -25,6 +25,8 @@ const PREPROCESSOR_COPY = {
     mergeSameTimestampsHint: "同一时间范围出现多条字幕时，用空格合并成一条",
     mergeLinesWithinCue: "合并同一字幕块内多行",
     mergeLinesWithinCueHint: "同一时间戳里的多行内容会合并到同一行",
+    noSourceText: "请先上传或粘贴字幕内容",
+    unsupportedSubtitle: "仅支持 SRT、VTT、ASS 和 LRC 字幕",
     resultTitle: "预处理结果",
     noProcessedText: "请先完成字幕预处理",
     processedStats: (output: number, original: number, removed: number, merged: number) => `输出 ${output}/${original} 条，移除 ${removed} 条，合并 ${merged} 处`,
@@ -62,6 +64,8 @@ const PREPROCESSOR_COPY = {
     mergeSameTimestampsHint: "Combine subtitles in the same time range into one line with spaces",
     mergeLinesWithinCue: "Merge multi-line subtitles inside one cue",
     mergeLinesWithinCueHint: "Join multiple lines inside the same subtitle cue with spaces",
+    noSourceText: "Upload or paste subtitle content first",
+    unsupportedSubtitle: "Only SRT, VTT, ASS, and LRC subtitles are supported",
     resultTitle: "Preprocessed Result",
     noProcessedText: "Process the subtitle content first",
     processedStats: (output: number, original: number, removed: number, merged: number) => `Kept ${output}/${original} cues, removed ${removed}, merged ${merged}`,
@@ -159,4 +163,3 @@ export const getSubtitleToolsCopy = (locale: string) => {
     composer: COMPOSER_COPY[language],
   };
 };
-

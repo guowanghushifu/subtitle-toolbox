@@ -16,6 +16,8 @@ test("contains the option-rich preprocessing labels", () => {
   const copy = getSubtitleToolsCopy("en");
   assert.match(copy.preprocessor.removeBracketedSdhWithoutKeywordCheck, /without keyword/i);
   assert.match(copy.preprocessor.removeRepeatedQuoteMarks, /quote/i);
+  assert.equal(copy.preprocessor.noSourceText, "Upload or paste subtitle content first");
+  assert.equal(copy.preprocessor.unsupportedSubtitle, "Only SRT, VTT, ASS, and LRC subtitles are supported");
 });
 
 test("contains separate unmatched labels for bilingual composition", () => {
