@@ -4,6 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 import {
   App,
   Button,
+  Card,
   Checkbox,
   Col,
   Divider,
@@ -24,13 +25,13 @@ import {
   ToolOutlined,
 } from "@ant-design/icons";
 import { useLocale, useTranslations } from "next-intl";
-import PageCard from "@/app/components/styled/PageCard";
 import ResultCard from "@/app/components/ResultCard";
 import SourceArea from "@/app/components/SourceArea";
 import { useCopyToClipboard } from "@/app/hooks/useCopyToClipboard";
+import { useFileExport } from "@/app/hooks/useFileExport";
 import { useLocalStorage } from "@/app/hooks/useLocalStorage";
 import { useTextStats } from "@/app/hooks/useTextStats";
-import { downloadFile, getErrorMessage } from "@/app/utils";
+import { getErrorMessage } from "@/app/utils";
 import { getSubtitleToolsCopy } from "./copy";
 import { useSubtitleFileInput } from "./hooks/useSubtitleFileInput";
 import { buildProcessedFileName } from "./lib/fileNames";
@@ -151,14 +152,15 @@ const SubtitlePreprocessor = () => {
     message.success(t("resetUploadSuccess"));
   };
 
+  const exportFile = useFileExport();
+
   const handleExport = async () => {
     if (!processedText || !processedFileType) {
       message.warning(copy.noProcessedText);
       return;
     }
     const fileName = buildProcessedFileName(input.fileName, processedFileType);
-    await downloadFile(processedText, fileName);
-    message.success(`${t("exportedFile")}: ${fileName}`);
+    await exportFile(processedText, fileName);
   };
 
   const logText =
@@ -199,7 +201,7 @@ const SubtitlePreprocessor = () => {
         </Col>
 
         <Col xs={24} lg={14} xl={15}>
-          <PageCard
+          <Card
             title={
               <Space>
                 <InboxOutlined /> {t("sourceArea")}
@@ -253,11 +255,11 @@ const SubtitlePreprocessor = () => {
             <Button type="primary" size="large" block icon={<ToolOutlined />} onClick={handleProcess} disabled={input.isReading}>
               {t("startProcess")}
             </Button>
-          </PageCard>
+          </Card>
         </Col>
 
         <Col xs={24} lg={10} xl={9}>
-          <PageCard
+          <Card
             title={
               <Space>
                 <SettingOutlined /> {copy.optionsTitle}
@@ -290,7 +292,7 @@ const SubtitlePreprocessor = () => {
               {optionRow(copy.mergeSameTimestamps, copy.mergeSameTimestampsHint, mergeSameTimestamps, setMergeSameTimestamps)}
               {optionRow(copy.mergeLinesWithinCue, copy.mergeLinesWithinCueHint, mergeLinesWithinCue, setMergeLinesWithinCue)}
             </Flex>
-          </PageCard>
+          </Card>
         </Col>
 
         {processedText && (
@@ -310,7 +312,7 @@ const SubtitlePreprocessor = () => {
 
         {hasProcessed && (
           <Col span={24}>
-            <PageCard
+            <Card
               title={
                 <Space>
                   <ProfileOutlined /> {copy.logTitle}
@@ -318,7 +320,7 @@ const SubtitlePreprocessor = () => {
               }>
               <Text style={{ display: "block", marginBottom: token.marginSM, color: token.colorTextSecondary }}>{processSummary}</Text>
               <TextArea value={logText} rows={Math.min(10, Math.max(4, processLogs.length + 1))} readOnly dir="auto" aria-label={copy.logTitle} />
-            </PageCard>
+            </Card>
           </Col>
         )}
       </Row>

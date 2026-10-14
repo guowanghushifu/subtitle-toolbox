@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import {
   App,
   Button,
+  Card,
   Col,
   Divider,
   Flex,
@@ -24,13 +25,13 @@ import {
   SyncOutlined,
 } from "@ant-design/icons";
 import { useLocale, useTranslations } from "next-intl";
-import PageCard from "@/app/components/styled/PageCard";
 import ResultCard from "@/app/components/ResultCard";
 import SourceArea from "@/app/components/SourceArea";
 import { useCopyToClipboard } from "@/app/hooks/useCopyToClipboard";
+import { useFileExport } from "@/app/hooks/useFileExport";
 import { useLocalStorage } from "@/app/hooks/useLocalStorage";
 import { useTextStats } from "@/app/hooks/useTextStats";
-import { downloadFile, getErrorMessage } from "@/app/utils";
+import { getErrorMessage } from "@/app/utils";
 import AssTemplateDrawer from "./AssTemplateDrawer";
 import { getSubtitleToolsCopy } from "./copy";
 import { useSubtitleFileInput } from "./hooks/useSubtitleFileInput";
@@ -183,14 +184,15 @@ const SubtitleBilingualComposer = () => {
     message.success(copy.composedSuccess);
   };
 
+  const exportFile = useFileExport();
+
   const handleExport = async () => {
     if (!resultText) return;
     const fileName = buildBilingualFileName(
       translatedInput.fileName,
       outputFormat,
     );
-    await downloadFile(resultText, fileName);
-    message.success(`${t("exportedFile")}: ${fileName}`);
+    await exportFile(resultText, fileName);
   };
 
   const logText =
@@ -210,7 +212,7 @@ const SubtitleBilingualComposer = () => {
     input: typeof originalInput,
     stats: ReturnType<typeof useTextStats>,
   ) => (
-    <PageCard
+    <Card
       title={
         <Space>
           <InboxOutlined /> {title}
@@ -266,7 +268,7 @@ const SubtitleBilingualComposer = () => {
         className="mt-3"
         textDirection="auto"
       />
-    </PageCard>
+    </Card>
   );
 
   return (
@@ -290,7 +292,7 @@ const SubtitleBilingualComposer = () => {
         </Col>
 
         <Col span={24}>
-          <PageCard
+          <Card
             title={
               <Space>
                 <SyncOutlined /> {copy.optionsTitle}
@@ -357,7 +359,7 @@ const SubtitleBilingualComposer = () => {
                 </Button>
               </Flex>
             </Flex>
-          </PageCard>
+          </Card>
         </Col>
 
         {resultText && (
@@ -377,7 +379,7 @@ const SubtitleBilingualComposer = () => {
 
         {hasComposed && (
           <Col span={24}>
-            <PageCard
+            <Card
               title={
                 <Space>
                   <ProfileOutlined /> {copy.logTitle}
@@ -398,7 +400,7 @@ const SubtitleBilingualComposer = () => {
                 dir="auto"
                 aria-label={copy.logTitle}
               />
-            </PageCard>
+            </Card>
           </Col>
         )}
       </Row>

@@ -6,11 +6,12 @@ import {
   defaultConfigs,
   isAdaptiveThinkingClaude,
   isAlwaysThinkingClaude,
+  isBetweenToolsOffClaude,
   isCustomModel,
   isThinkingModel,
   isApiKeyOptional,
   pickThinkingLevel,
-  relayWouldServe,
+  relayHintWouldHelp,
   resolveWireEndpoint,
   OPENAI_COMPAT_KEYS,
   OPENAI_COMPAT_PROVIDERS,
@@ -19,17 +20,22 @@ import {
   type OpenAICompatProviderKey,
   type OpenAICompatProviderSpec,
 } from "../registry";
-import { getAIModelPrompt } from "../utils";
+import { getAIModelPromptParts } from "../utils";
 import { isNetworkError } from "@/app/utils/errorUtils";
 
-import { fetchJSON, normalizeNumber, normalizePrompt, requireApiKey, requireUrl, completeOpenAICompatUrl, PROXY_ENDPOINTS, getOpenAICompatContent, getClaudeContent, RELAY_HINT_MARKER, RELAY_HINT_MESSAGE } from "./shared";
+import { fetchJSON, normalizeNumber, normalizePrompt, requireApiKey, requireUrl, completeOpenAICompatUrl, PROXY_ENDPOINTS, getOpenAICompatContent, getClaudeContent, RELAY_HINT_MARKER } from "./shared";
 
-// Prepare prompts common to all LLM services
-const preparePrompts = (params: { text: string; targetLanguage: string; sourceLanguage: string; systemPrompt?: string; userPrompt?: string; fullText?: string }) => {
+// Prepare prompts common to all LLM services. The user prompt comes back both
+// joined (`prompt`) and split at ${content} (`promptPrefix` / `promptSuffix`):
+// the prefix is byte-stable across requests and is what provider prefix
+// caching keys on (subtitle-translator#53). Anything per-request — today the
+// glossary block — goes on the suffix side, never into the prefix or system.
+const preparePrompts = (params: { text: string; targetLanguage: string; sourceLanguage: string; systemPrompt?: string; userPrompt?: string; fullText?: string; glossaryBlock?: string }) => {
   const effectiveSystemPrompt = normalizePrompt(params.systemPrompt, DEFAULT_SYSTEM_PROMPT);
   const effectiveUserPrompt = normalizePrompt(params.userPrompt, DEFAULT_USER_PROMPT);
-  const prompt = getAIModelPrompt(params.text, effectiveUserPrompt, params.targetLanguage, params.sourceLanguage, params.fullText);
-  return { effectiveSystemPrompt, prompt };
+  const { prefix: promptPrefix, suffix } = getAIModelPromptParts(params.text, effectiveUserPrompt, params.targetLanguage, params.sourceLanguage, params.fullText);
+  const promptSuffix = params.glossaryBlock ? `${params.glossaryBlock}\n\n${suffix}` : suffix;
+  return { effectiveSystemPrompt, prompt: promptPrefix + promptSuffix, promptPrefix, promptSuffix };
 };
 
 // Common OpenAI-compatible request helper (named-parameter config object)
@@ -41,23 +47,26 @@ type OpenAICompatRequestConfig = {
   /** Absent = provider never sends temperature (locked/rejected upstream — see registry spec). */
   defaultTemperature?: number;
   extraHeaders?: Record<string, string>;
+  /**
+   * 这个 provider 要求把本轮会话 id 放进哪个请求头（registry 声明头名）。
+   * 值取自 `params.sessionId` —— 流水线每轮生成一次，轮内稳定。
+   */
+  sessionHeader?: string;
   extraBody?: Record<string, unknown>;
 };
 
 const openAICompatRequest = async (cfg: OpenAICompatRequestConfig): Promise<string> => {
-  const { params, serviceName, endpoint, defaultModel, defaultTemperature, extraHeaders, extraBody } = cfg;
+  const { params, serviceName, endpoint, defaultModel, defaultTemperature, extraHeaders, sessionHeader, extraBody } = cfg;
   const { apiKey, model, temperature } = params;
   const { effectiveSystemPrompt, prompt } = preparePrompts(params);
   // apiKey 可选的服务跳过 requireApiKey —— 判据查 registry 的 isApiKeyOptional,
   // 与 getConfigStatus(驱动 UI 标签与 validate)是同一个,不在这里重拼一遍 OR。
   // 拦下一个 UI 刚标成「无需配置」的服务,是自相矛盾。
   const key = isApiKeyOptional(params.translationMethod) ? apiKey?.trim() : requireApiKey(serviceName, apiKey);
-  // Model optional when BOTH user model and spec default are empty (only
-  // litellm: defaultModel "" by design). Omit the field — same semantics as
-  // the hand-written `llm` Custom service — so server-side defaults apply
-  // (`litellm --model X` / general_settings.completion_model). Sending "" is
-  // equivalent only on gateways that falsy-test it; omission is spec-clean.
-  // Every other provider has a non-empty defaultModel → field always present.
+  // Model 字段：用户填的 model 与 spec 的 defaultModel 都为空时【整个字段省略】，
+  // 让服务端自己的默认（网关启动参数 / completion_model 那类）生效。发空串只在
+  // 少数会把 falsy 值当"未提供"的网关上等效，省略才是规范做法。自建网关型 service
+  // 走同一语义。其余 provider 都有非空 defaultModel ⇒ 该字段恒在。
   const effectiveModel = model || defaultModel;
 
   const data = await fetchJSON(endpoint, {
@@ -66,6 +75,9 @@ const openAICompatRequest = async (cfg: OpenAICompatRequestConfig): Promise<stri
       "Content-Type": "application/json",
       ...(key ? { Authorization: `Bearer ${key}` } : {}),
       ...extraHeaders,
+      // 会话 id 按 registry 声明的头名发（只在这两者都在时才发）。放在 extraHeaders
+      // 之后，免得被同名的静态头覆盖。
+      ...(sessionHeader && params.sessionId ? { [sessionHeader]: params.sessionId } : {}),
     },
     body: JSON.stringify({
       messages: [
@@ -96,8 +108,8 @@ const resolveEndpoint = (key: OpenAICompatProviderKey, spec: OpenAICompatProvide
 // Two-tier OpenAI-compat service generation:
 //   - TIER 1 (thinking-aware): registered in THINKING_BUILDERS below. Each
 //     entry is `gated(service, shape)` — the shared gate + one effort→wire shape.
-//   - TIER 2 (base / no builder): providers with no thinking-tagged SKUs in the
-//     registry (stepfun, opencode, tokenhub, atlascloud, litellm). Factory returns
+//   - TIER 2 (base / no builder): OPENAI_COMPAT provider 里【没有】THINKING_BUILDERS
+//     条目的那些 —— 名单由这两处派生，别在这里重列（重列过一次就漂过一次）。Factory returns
 //     a pass-through service. isThinkingCapableProvider is false for these, so the
 //     UI offers no thinking control at all — including on custom SKUs.
 // Adding a thinking-capable provider = tag its SKU(s) in the registry + add one
@@ -151,7 +163,7 @@ const gated =
 
 // ── Shared wire shapes (reused across vendors with identical protocols) ──────
 //
-// 【思考参数的官方出处】2026-08-20 逐家核对过一轮,改形态前先读对应页,别猜:
+// 【思考参数的官方出处】逐家核对过一轮,改形态前先读对应页,别猜:
 //   deepseek     api-docs.deepseek.com/zh-cn/guides/thinking_mode
 //                (thinking:{type} + reasoning_effort:low/high/max —— 无 medium)
 //   openai/azure developers.openai.com/api/docs/guides/reasoning
@@ -186,9 +198,29 @@ const thinkingType: EffortShape = (e) => ({ thinking: { type: e ? "enabled" : "d
 // ⚠ SiliconFlow 【不】用这个形态(理由见 THINKING_BUILDERS 里 siliconflow 行的注释)。
 const enableThinking: EffortShape = (e) => ({ enable_thinking: !!e });
 
-// `reasoning_effort` enum with explicit "none" off — OpenAI GPT-5.x (omit-default
-// medium on 5.5) + Grok (omit-default "low"). Also reused by Azure (custom service).
+// ⚠ reasoningEffortOrNone 只适用于【收 none 的 family】(GPT-5.x / Grok 系)。
+//   openai 与 azureopenai 不能直接用它 —— 这两个
+//   provider 内部就有两种关闭能力(见下面 openaiEffort)。
 const reasoningEffortOrNone: EffortShape = (e) => ({ reasoning_effort: e ?? "none" });
+
+// OpenAI / Azure OpenAI:关闭态按【SKU】发,不能一刀切 none。
+// 逐型号页(developers.openai.com/api/docs/models/<id>.md,curl 直出):
+//   gpt-6-luna / gpt-6-sol / gpt-5.6-* / gpt-5.4-mini 收 none(5.4-mini 的 none 还是默认值)
+//   gpt-6-astra  「supports low, medium, high, xhigh, and max」—— 【没有 none】
+//   gpt-6.1-sol  「The none and minimal reasoning efforts are not supported」
+// 一刀切发 none ⇒ astra / 6.1-sol 上【每请求 400】(DeepSeek「10M tokens」事故的同款形态:
+// 发一个厂商枚举里没有的值当"关",要么被拒、要么被忽略后按服务端默认静默计费)。
+// 一刀切发最低档 ⇒ 反向出错:luna 明明支持 none 却照常推理,用户关了思考仍在烧钱。
+// 所以判据是【该 SKU 有没有声明 thinkingLevels】—— 声明了 = 官方没有关闭值,
+// 能做到的"最关"就是最低档;没声明 = none 是真关闭值。数据在 registry,这里不按名字猜。
+const openaiEffort =
+  (service: OpenAICompatProviderKey): EffortShape =>
+  (e, model) => {
+    const sku = model ?? OPENAI_COMPAT_PROVIDERS[service].defaultModel;
+    const levels = getProviderModels(service).find((m) => m.value === sku)?.thinkingLevels;
+    return { reasoning_effort: levels?.length ? pickThinkingLevel(service, sku, e) : e ?? "none" };
+  };
+
 // `reasoning_effort` binary high|none — Cohere (command-a-reasoning) + Mistral
 // (adjustable medium/small). Vendor exposes only two effective tiers, so any "on"
 // effort collapses to "high"; off sends an explicit "none" (both server-default-ON).
@@ -220,8 +252,10 @@ const minimaxThinking: EffortShape = (e) => ({ thinking: { type: e ? "adaptive" 
 // "本来就是关的":TokenHub 文档(1823/135872)给 hy3 的 thinking.type 三个合法
 // 取值 enabled/disabled/adaptive,但明写「默认关闭思考」,省略参数 = 不推理 =
 // 翻译要的行为。加开关的完整步骤见 registry.ts tokenhub models 上方的 playbook
-// (含 ⚠ 别用 reasoning_effort:"none")。NVIDIA NIM 自 v4-pro 移除后已没有任何
-// thinking 模型(registry nvidia 注释是权威),这里没有它的 builder 是对的。
+// (含 ⚠ 别用 reasoning_effort:"none")。NVIDIA NIM 的 thinking 不走本表 —— 它的
+// chat_template_kwargs 注入在 service 里内联 (buildNvidiaThinkingParams)；
+// 随 deepseek-v4.1-flash 上架重新启用，NIM 默认关思考、省略=关，
+// 所以它既不需要显式 disable、也不进 SERVER_DEFAULT_THINKING_ON。
 
 // (No temperature handling here: providers whose lineup rejects/locks the param
 // simply omit `defaultTemperature` in their registry spec — the factory then
@@ -229,7 +263,12 @@ const minimaxThinking: EffortShape = (e) => ({ thinking: { type: e ? "adaptive" 
 
 const THINKING_BUILDERS: Partial<Record<OpenAICompatProviderKey, ExtraBodyBuilder>> = {
   // `reasoning_effort` enum, explicit "none" off (server-default-ON)
-  openai: gated("openai", reasoningEffortOrNone),
+  openai: gated("openai", openaiEffort("openai")),
+  // Azure 镜像 openai 同形态（部署名映射同一批 GPT-5 SKU，GPT-5.x omit→medium
+  // 意味着关闭态必须发显式 "none"）。gpt-chat-latest 在 registry 不打标签 →
+  // 走 listed-but-untagged 省略分支。旧版是手写 buildAzureReasoningBody，
+  // 并入工厂后与 gated() 逐分支同构（tagged 2 态 / custom 3 态 / 省略）。
+  azureopenai: gated("azureopenai", openaiEffort("azureopenai")),
   // Grok:档位表在 registry 的 grok.models[].thinkingLevels(官方逐模型表)。
   // ⚠ off 态发【最低档 low】而不是 "none":官方枚举只有 low/medium/high/xhigh,
   // 并明写 "Reasoning cannot be disabled"。发 "none" 两种结局都坏 —— 被拒则
@@ -249,7 +288,14 @@ const THINKING_BUILDERS: Partial<Record<OpenAICompatProviderKey, ExtraBodyBuilde
     /kimi-k3/.test(model ?? "") ? { reasoning_effort: pickThinkingLevel("moonshot", model!, e) } : thinkingType(e),
   ),
   doubao: gated("doubao", thinkingType),
-  zhipu: gated("zhipu", thinkingType),
+  // GLM-5.3 系不是扁平 thinking:{type} 那一条：官方只接受 `thinking:{type:"enabled"}` 配
+  // `reasoning_effort`(low/high/max,默认 max)，并明写「不再支持 thinking.type:"disabled"」
+  // 「否则请求将失败」(docs.bigmodel.cn/cn/guide/models/text/glm-5.3.md)。所以关闭态按官方
+  // 迁移原句映射到最低档 low，而不是发一个会被拒的 disabled。老世代 GLM 未打标 → gated 省略。
+  zhipu: gated("zhipu", (e, model) => ({ thinking: { type: "enabled" }, reasoning_effort: pickThinkingLevel("zhipu", model!, e) })),
+  // Step 3.7 Flash 官方专节「支持三档推理强度」low/medium/high（medium 默认），全篇无
+  // none/disabled 关闭值 ⇒ 关闭态发最低档，绝不发厂商没写的值。未打标的 SKU 由 gated 省略。
+  stepfun: gated("stepfun", (e, model) => ({ reasoning_effort: pickThinkingLevel("stepfun", model!, e) })),
   mimo: gated("mimo", thinkingType),
   // MiniMax M3: thinking:{type:"adaptive"|"disabled"} (server-default adaptive = ON)
   minimax: gated("minimax", minimaxThinking),
@@ -268,7 +314,7 @@ const THINKING_BUILDERS: Partial<Record<OpenAICompatProviderKey, ExtraBodyBuilde
   // OpenRouter: graded effort when on; universal `reasoning:{enabled:false}` off for
   // tagged upstream reasoning SKUs (untagged free models omit via the gate).
   // OpenRouter:官方【统一参数】是 reasoning 对象(openrouter.ai/docs/use-cases/
-  // reasoning-tokens,2026-08-20 核对),effort 取 max/xhigh/high/medium/low/
+  // reasoning-tokens),effort 取 max/xhigh/high/medium/low/
   // minimal/none。开关两态都用同一个对象 —— 曾经开启态发顶层 reasoning_effort、
   // 关闭态发 reasoning:{enabled:false},两种写法混用:文档只把统一对象列为推荐
   // 形态,顶层别名没有成文保证,一旦它不再被识别,开启态就静默失效(而关闭态
@@ -277,7 +323,7 @@ const THINKING_BUILDERS: Partial<Record<OpenAICompatProviderKey, ExtraBodyBuilde
   // Graded reasoning_effort, OMIT off (undisableable): Groq gpt-oss.
   groq: gated("groq", groqEffort),
   // Cerebras:两个公共模型的 reasoning_effort 取值【不同】,必须按 SKU 分流
-  // (inference-docs.cerebras.ai/api-reference/chat-completions,2026-08-20):
+  // (inference-docs.cerebras.ai/api-reference/chat-completions):
   //   · gpt-oss-120b: low/medium(默认)/high —— 无 none,关不掉 → 走档位表,
   //     关闭态发最低档 low(registry 的 thinkingLevels 已声明)
   //   · gemma-4-31b:  none(默认)/low/medium/high —— 有真正的关闭值,
@@ -290,6 +336,13 @@ const THINKING_BUILDERS: Partial<Record<OpenAICompatProviderKey, ExtraBodyBuilde
       ? { reasoning_effort: pickThinkingLevel("cerebras", model!, e) }
       : reasoningEffortOrNone(e),
   ),
+  // 订阅套餐端点(registry 里 hidden,UI 默认不显示):火山 Coding Plan 与 doubao
+  // 按量线同为扁平 thinking:{type};阿里百炼线(2026-09 起为 Token Plan 端点)
+  // 与 qianfan 同为裸 enable_thinking —— 不能用 qwenThinking,那个 on 档额外带
+  // thinking_budget,且 qwen3.8 系列等在册 SKU 根本不吃 enable_thinking(registry
+  // 里未打 thinking 标,gated 对它们不发任何思考参数)。按 method key 分流。
+  volcengine: gated("volcengine", thinkingType),
+  alibaba: gated("alibaba", enableThinking),
   // (tokenhub intentionally absent — see note above)
 };
 
@@ -298,42 +351,12 @@ const THINKING_BUILDERS: Partial<Record<OpenAICompatProviderKey, ExtraBodyBuilde
 // disable payload). Returns {} for providers with no builder.
 export const buildThinkingExtraBody = (service: OpenAICompatProviderKey, params: TranslateTextParams): Record<string, unknown> => THINKING_BUILDERS[service]?.(params) ?? {};
 
-// Wrap a relay-capable provider's service so a browser network/CORS TypeError
-// with relay OFF is rewritten into the actionable relay hint. Applied generically
-// to every relay-capable provider — not just DeepSeek — so they all get the hint
-// (and the non-retryable classification) instead of a raw doomed retry.
-// isNetworkError covers all three engines' wording (Chrome "Failed to fetch",
-// Firefox "NetworkError when attempting…", Safari "Load failed") — matching only
-// Chrome's left FF/Safari users burning 3 retries on a doomed CORS error and
-// then seeing a generic "service unreachable" instead of the relay remediation.
-// 「建议打开中转」的两个前置:中转还没开,而且开了确实有用(registry.relayWouldServe
-// —— 与端点解析、界面文案同一个判据,bare host / 官方变体 / 自建中转的取舍
-// 不在这里重算)。指人去开一个开了也没用的开关,比不提示更糟。
-// ⚠ 别退回成 `&& !params.url`:那是旧的「自定义 endpoint 压过开关」优先级留下的,
-// 会连"填的就是官方地址"和"自己有中转"这两种真能获益的情况一起吃掉。
-const relayHintWouldHelp = (params: TranslateTextParams, providerKey: string): boolean =>
-  !params.useRelay && relayWouldServe(providerKey, { url: params.url, relayBase: params.relayBase });
-
-const withRelayHint = (service: TranslationService, providerKey: string): TranslationService => async (params) => {
-  try {
-    return await service(params);
-  } catch (error) {
-    if (relayHintWouldHelp(params, providerKey) && isNetworkError(error)) {
-      // errorHintKey → describeError renders the localized common.errorHintRelay
-      // text; the English message stays as the console/log fallback and carries
-      // RELAY_HINT_MARKER for retry.ts's non-retryable classification.
-      throw Object.assign(new Error(RELAY_HINT_MESSAGE), { errorHintKey: "errorHintRelay" });
-    }
-    throw error;
-  }
-};
-
 // Factory: generate a TranslationService from a provider spec key, optionally
-// wiring in a thinking extra-body builder. Relay-capable providers are wrapped
-// with the shared CORS → relay-hint rewriter.
+// wiring in a thinking extra-body builder. 网络错误 → 可行动提示的改写不在
+// 这里 —— 它对每个服务都一样,统一在 withNetworkHint(services/index.ts)。
 const makeOpenAICompat = (key: OpenAICompatProviderKey, extraBodyBuilder?: ExtraBodyBuilder): TranslationService => {
   const spec = OPENAI_COMPAT_PROVIDERS[key] as OpenAICompatProviderSpec;
-  const base: TranslationService = async (params) =>
+  return async (params) =>
     openAICompatRequest({
       params,
       serviceName: spec.label,
@@ -341,12 +364,9 @@ const makeOpenAICompat = (key: OpenAICompatProviderKey, extraBodyBuilder?: Extra
       defaultModel: spec.defaultModel,
       defaultTemperature: spec.defaultTemperature,
       extraHeaders: spec.extraHeaders,
+      sessionHeader: spec.sessionHeader,
       extraBody: extraBodyBuilder?.(params),
     });
-  // Every relay-capable provider gets the hint wrap: a CORS failure with the
-  // toggle off (incl. a default-on provider the user switched to direct) is
-  // remediated by turning the relay (back) on.
-  return spec.defaultUseRelay !== undefined ? withRelayHint(base, key) : base;
 };
 
 // Auto-generate every OpenAI-compat service: each provider gets a base service,
@@ -354,8 +374,9 @@ const makeOpenAICompat = (key: OpenAICompatProviderKey, extraBodyBuilder?: Extra
 const openAICompatServicesBase = Object.fromEntries(OPENAI_COMPAT_KEYS.map((k) => [k, makeOpenAICompat(k, THINKING_BUILDERS[k])])) as Record<OpenAICompatProviderKey, TranslationService>;
 
 // DeepSeek extra wrap: the generic relay-hint (CORS → "API Relay") already comes
-// from the factory; DeepSeek additionally rewrites a 403 (its direct endpoint
-// blocks some browser origins outright) into the same relay remediation hint.
+// from withNetworkHint (services/index.ts); DeepSeek additionally rewrites a 403
+// (its direct endpoint blocks some browser origins outright) into the same relay
+// remediation hint — a 403 is NOT a network error, so that wrapper never sees it.
 export const deepseek: TranslationService = async (params) => {
   try {
     return await openAICompatServicesBase.deepseek(params);
@@ -365,7 +386,7 @@ export const deepseek: TranslationService = async (params) => {
     // 字面匹配漏掉的恰是最常见的浏览器源被拦场景。fetchJSON 已 Object.assign
     // 附 status。
     const status = (error as { status?: number } | null)?.status;
-    if (relayHintWouldHelp(params, "deepseek") && (status === 403 || (error instanceof Error && error.message.includes("[403]")))) {
+    if (relayHintWouldHelp("deepseek", params) && (status === 403 || (error instanceof Error && error.message.includes("[403]")))) {
       // ⚠ 【status 必须带上】。这里换了一个新 Error,原来的 status 就丢了 ——
       // 而整轮凭据快停(isDefiniteAuthFailure)只认数值 401/403,不认消息文本
       // (消息里一个 "Forbidden" 就掐掉整批太危险,见 retry.ts 那段注释)。
@@ -379,28 +400,24 @@ export const deepseek: TranslationService = async (params) => {
   }
 };
 
-// Direct exports — every provider in OPENAI_COMPAT_KEYS gets one for
-// backwards-compatible imports elsewhere. Generated from the factory map so
-// adding a provider needs no edit here.
-export const openai = openAICompatServicesBase.openai;
-export const moonshot = openAICompatServicesBase.moonshot;
-export const openrouter = openAICompatServicesBase.openrouter;
-export const groq = openAICompatServicesBase.groq;
-export const grok = openAICompatServicesBase.grok;
-export const siliconflow = openAICompatServicesBase.siliconflow;
-export const qwen = openAICompatServicesBase.qwen;
-export const doubao = openAICompatServicesBase.doubao;
-export const zhipu = openAICompatServicesBase.zhipu;
-export const minimax = openAICompatServicesBase.minimax;
-export const tokenhub = openAICompatServicesBase.tokenhub;
-export const mistral = openAICompatServicesBase.mistral;
-export const cohere = openAICompatServicesBase.cohere;
-export const qianfan = openAICompatServicesBase.qianfan;
+// Azure —— 工厂服务 + 一层 requireUrl 守卫。并入 openai-compat 工厂
+// （前提事实：v1 API 接受裸 api-key 走 Authorization: Bearer，官方 key 认证示例
+// 就是裸 OpenAI 客户端 —— 见 registry azureopenai 条目注释）。守卫拦的是
+// 空/纯空白 URL：工厂对 openai-compat 的「留空 = 官方默认」兜底在这里不存在
+// （endpoint 恒空），fetch("") 会打到当前页面、被当可重试错误烧预算（机制见
+// 下方 nvidia 的 !!url?.trim() 注释）。URL_ALSO_REQUIRED 已在验证层拦过，
+// 这是第二道（手改存储/直调路径）。
+export const azureopenai: TranslationService = async (params) => {
+  requireUrl("Azure OpenAI", params.url);
+  return openAICompatServicesBase.azureopenai(params);
+};
 
-// Dispatch map — base services + deepseek override (with CORS error rewrite).
+// Dispatch map — base services + deepseek override (with CORS error rewrite)
+// + azureopenai override (with requireUrl guard)。
 export const openAICompatServices: Record<OpenAICompatProviderKey, TranslationService> = {
   ...openAICompatServicesBase,
   deepseek,
+  azureopenai,
 };
 
 // --- Special-case services that don't fit the OpenAI-compatible pattern ---
@@ -467,62 +484,6 @@ export const gemini: TranslationService = async (params) => {
   return text.trim();
 };
 
-// Azure mirrors OpenAI's reasoning behavior (deployments map to GPT-5 SKUs), so it
-// reuses the same `reasoningEffortOrNone` shape: gpt-5.5 / gpt-chat-latest omit→
-// "medium" (ON) means a tagged deployment must send explicit "none" when off. A
-// custom (unlisted) deployment instead sends the effort ONLY on opt-in and omits
-// otherwise — same custom-model policy as gated() (off → 400-safe omit, on → user's
-// call). (Azure is a custom service, not in OPENAI_COMPAT_KEYS, so it can't use gated.)
-export const buildAzureReasoningBody = (deployment: string | undefined, reasoningEffort: ThinkingDirective | undefined): Record<string, unknown> => {
-  const model = deployment || (defaultConfigs.azureopenai.model as string);
-  // Tagged: 2-state (undefined → "none" disable, effort → that effort).
-  if (isThinkingModel("azureopenai", model)) return reasoningEffortOrNone(reasoningEffort === "auto" ? undefined : reasoningEffort);
-  // Custom deployment 3-state: "auto" → omit; default Off (undefined) → "none"; effort → that effort.
-  if (isCustomModel("azureopenai", model)) {
-    if (reasoningEffort === "auto") return {};
-    return reasoningEffortOrNone(reasoningEffort);
-  }
-  return {}; // listed-but-untagged → omit
-};
-
-export const azureopenai: TranslationService = async (params) => {
-  const { apiKey, url, model, apiVersion, reasoningEffort } = params;
-  const { effectiveSystemPrompt, prompt } = preparePrompts(params);
-  const endpoint = requireUrl("Azure OpenAI", url);
-  const deployment = model || defaultConfigs.azureopenai.model!;
-  const version = apiVersion || defaultConfigs.azureopenai.apiVersion!;
-  const requestUrl = `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${version}`;
-
-  const key = requireApiKey("Azure OpenAI", apiKey);
-
-  // Azure deployment names mirror OpenAI model IDs; GPT-5 family supports
-  // `reasoning_effort` per docs.microsoft.com/azure/.../foundry-models-sold-by-azure.
-  // Orchestrator gates effort on (thinking-tagged ∧ user picked an effort).
-  // No max_tokens passthrough — same rationale as openAICompatRequest above.
-  //
-  // No temperature — Microsoft lists it under "Not Supported" for the whole
-  // GPT-5 reasoning family (runtime evidence: 400, not ignore); provider-level
-  // omit, the config has no temperature field (registry).
-  const requestBody: Record<string, unknown> = {
-    messages: [
-      { role: "system", content: effectiveSystemPrompt },
-      { role: "user", content: prompt },
-    ],
-    ...buildAzureReasoningBody(deployment, reasoningEffort),
-  };
-
-  const data = await fetchJSON(requestUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "api-key": key,
-    },
-    body: JSON.stringify(requestBody),
-    signal: params.signal,
-  });
-  return getOpenAICompatContent(data, "Azure OpenAI");
-};
-
 // Yandex AI Studio — protocol-wise plain OpenAI-compat chat/completions, but a
 // custom service because the factory can't assemble per-tenant model URIs:
 // gpt://<folder_id>/<model>/latest is built from the dedicated `folderId`
@@ -533,7 +494,7 @@ export const azureopenai: TranslationService = async (params) => {
 // Relay: useRelay defaults ON in registry defaults (upstream sends no CORS
 // headers as of 2026-06 — preflight OPTIONS is parsed as a JSON body → 400),
 // but the toggle stays user-controllable like every relay-capable provider.
-// Pure URI assembly, exported for unit tests (same pattern as buildAzureReasoningBody).
+// Pure URI assembly, exported for unit tests (same pattern as buildGeminiThinkingConfig).
 export const buildYandexModelUri = (model: string | undefined, folderId: string | undefined): string => {
   // Trim BEFORE the fallback: a whitespace-only model is truthy, so `model || default`
   // would "fall back" to "" and ship a malformed `gpt://<folder>/` to the wire.
@@ -555,7 +516,7 @@ export const buildYandexModelUri = (model: string | undefined, folderId: string 
 // 使用。这里派生而不是再抄一遍字面量,三处就不可能漂移。
 export const YANDEX_DIRECT_ENDPOINT = getProviderEndpoints("yandex")![0].url;
 
-export const yandex: TranslationService = withRelayHint(async (params) => {
+export const yandex: TranslationService = async (params) => {
   const model = buildYandexModelUri(params.model, params.folderId);
   return openAICompatRequest({
     params: { ...params, model },
@@ -564,7 +525,7 @@ export const yandex: TranslationService = withRelayHint(async (params) => {
     defaultModel: model,
     defaultTemperature: defaultConfigs.yandex.temperature as number,
   });
-}, "yandex");
+};
 
 // NVIDIA NIM wraps thinking params in `chat_template_kwargs` (vs native APIs
 // which use top-level `reasoning_effort` / `thinking`). Orchestrator-level gate
@@ -623,13 +584,30 @@ export const nvidia: TranslationService = async (params) => {
 };
 
 export const llm: TranslationService = async (params) => {
-  const { apiKey, url, model, temperature, sendSystemPrompt, maxTokens } = params;
+  const { apiKey, url, model, temperature, sendSystemPrompt, maxTokens, useRelay, relayBase } = params;
   const { effectiveSystemPrompt, prompt } = preparePrompts(params);
 
   const serviceName = "Custom (OpenAI-compatible)";
-  // Belt-and-suspenders: UI auto-completes on blur, but settings imported from
-  // file or edited via localStorage may bypass that — re-normalize here.
-  const apiEndpoint = completeOpenAICompatUrl(requireUrl(serviceName, url));
+  // Custom 没有隐式默认端点(URL 即凭证),所以 requireUrl 这道守卫是【承重】的,
+  // 不能因为「resolveWireEndpoint 已经会补全」就删。⚠ llm 的 getRelayAllowlist
+  // 【不是空的】—— 它先读 spec.endpoints,所以 [0] 是那枚 LM Studio 芯片
+  // (http://127.0.0.1:1234/v1/chat/completions,实测 9 条)。少了这道守卫,空地址
+  // 会走 resolveWireEndpoint 的「空 url → allowlist[0]」兜底,静默打向一个用户
+  // 从没选过的本地运行时 —— 比抛错糟得多。
+  requireUrl(serviceName, url);
+  // 出口地址与所有中转能力服务共用一条咽喉(registry.resolveWireEndpoint):
+  // 补全器、allowlist、「能不能走中转」全在 registry 一处,与界面同判据。
+  //
+  // ⚠ Custom 在这里能走通中转,靠的是【用户自己的 relayBase】+ 他自己那份 Worker
+  // 里声明的 `llm` allowlist。四种组合的落点(全在 relayWouldServe 里判):
+  //   · 直连                       → 直接打用户填的地址
+  //   · 自建 relayBase             → {base}/api/llm?endpoint=<用户地址>
+  //   · 内置公共中转 + 任意自填地址 → 退回直连。内置 Worker 的 llm allowlist 只声明了
+  //                                   那两枚公开芯片(Together / Fireworks),自填地址不在
+  //                                   其中,发过去只会换一个 400,还把 ?token=SECRET
+  //                                   留在别人的日志里。
+  //   · 环回/内网地址(本地运行时) → 退回直连(远端够不着 127.0.0.1)
+  const apiEndpoint = resolveWireEndpoint("llm", { url, useRelay, relayBase });
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (apiKey?.trim()) {
@@ -638,11 +616,10 @@ export const llm: TranslationService = async (params) => {
 
   // sendSystemPrompt=false: omit the system ROLE for chat templates that
   // reject it (Gemma family) — but the system prompt's CONTENT must survive,
-  // prepended to the user message. The glossary block lives ONLY in the system
-  // prompt (per-request composition in translateSingle), so dropping the
-  // message entirely silently disabled the glossary's primary mechanism for
-  // the exact audience the toggle exists for. undefined defaults to include
-  // (pre-toggle configs).
+  // prepended to the user message: dropping the message entirely once
+  // silently disabled the glossary (then composed into system) for the exact
+  // audience the toggle exists for. undefined defaults to include (pre-toggle
+  // configs).
   const messages =
     sendSystemPrompt === false
       ? [{ role: "user", content: `${effectiveSystemPrompt}\n\n${prompt}` }]
@@ -680,7 +657,7 @@ export const llm: TranslationService = async (params) => {
 export const CLAUDE_DIRECT_ENDPOINT = getProviderEndpoints("claude")![0].url;
 
 /**
- * Gemini 的 generationConfig（目前只含 thinkingConfig）。抽成具名导出而不是内联，
+ * Gemini 的 generationConfig 构造。抽成具名导出而不是内联，
  * 是为了让【同步给下游的 provider 目录】能直接求值拿到这份线格式 —— 手抄一份
  * 到下游就会分叉，而这两家没有 THINKING_BUILDERS 条目可调（它们是 custom
  * service，思考参数写在实现里）。
@@ -691,6 +668,16 @@ export const CLAUDE_DIRECT_ENDPOINT = getProviderEndpoints("claude")![0].url;
  * disable 路径的杀伤力:enable 至少要用户主动选,disable 是所有人的默认态。
  */
 export const buildGeminiThinkingConfig = (model: string, directive: ThinkingDirective | undefined): Record<string, unknown> => {
+  // thinkingLevel 是 Gemini 3.x 起才有的字段,打到 2.x/1.x 上是 400
+  // "Thinking level is not supported for this model."(实测 gemini-2.5-flash)。
+  // ⚠ 别照 docs/thinking 那张档位表判 —— 它把 2.5 列成支持 low/medium/high,但那页写的是
+  // Interactions API(/v1beta/interactions,扁平 generation_config.thinking_level,服务端
+  // 替你映射成 budget);本仓走 generateContent,那里的字段参考写的是 "Use with earlier
+  // models results in an error"。两页都是官方且同期更新,取哪页看打的是哪个端点。
+  // 旧世代已从 models[] 移除,只可能是用户手填 —— 一律不发思考参数、跟服务端默认走,
+  // 不做 budget mapping(那正是当初移除 2.5 时刻意避开的复杂度)。
+  // 代价:界面那个档位下拉对 2.x 是空操作(手填 SKU 本来就是"自己负责"那一档)。
+  if (/^gemini-[12]\./.test(model)) return {};
   const out: Record<string, unknown> = {};
   const level = (want?: ReasoningEffort) => pickThinkingLevel("gemini", model, want);
   if (isThinkingModel("gemini", model)) {
@@ -704,14 +691,17 @@ export const buildGeminiThinkingConfig = (model: string, directive: ThinkingDire
 };
 
 // Pure request-shaping for Claude's two thinking generations — exported for
-// thinking.test.ts (same pattern as buildAzureReasoningBody). Membership
+// thinking.test.ts (same pattern as buildYandexModelUri). Membership
 // predicate lives in the registry (isAdaptiveThinkingClaude).
-//   - Adaptive gen (Opus 4.7/4.8, Sonnet 5, Fable 5, Mythos): effort →
-//     thinking:{type:"adaptive"} + output_config.effort; off → explicit
-//     disabled (Sonnet 5 server-defaults adaptive otherwise); "auto" → omit
+//   - Adaptive gen (Opus 4.7/4.8/5/5.5, Sonnet 5/5.5, Fable 5/5.1, Mythos): effort →
+//     thinking:{type:"adaptive"} + output_config.effort; "auto" → omit
 //     entirely and follow the server default. Legacy budget_tokens shape 400s.
-//     ⚠ 这一代里 Fable 5 / Mythos 是 "Always on":它们连 disabled 也 400,
-//     「关」只能是整个字段不发(isAlwaysThinkingClaude)。
+//     ⚠ 这一代的【关闭档】按官方逐模型表分三种形态，发错就是每请求 400（逐页核原文）：
+//       · Opus 5.5 / Fable 5.x / Mythos = "Always on" → 连 disabled 也 400，「关」只能整个字段不发
+//         (isAlwaysThinkingClaude)；
+//       · Sonnet 5.5 → 发 disabled 会 400，官方的最低档是 between_tools (isBetweenToolsOffClaude)，
+//         且它在 xhigh/max effort 下发会 400 —— 只在【不带 effort】的关闭态发；
+//       · 老世代(Sonnet 5 / Opus 5 / Opus 4.7-4.8) → 仍发 disabled。
 //   - Extended gen (Haiku 4.5, Sonnet 4.6): effort → enabled + budget_tokens
 //     (integer budget, not enum); off/auto → omit (server default is off).
 // `directive` comes from deriveThinkingParams, which normalizes tagged-model
@@ -725,19 +715,32 @@ export const buildClaudeThinkingBody = (model: string, directive: ThinkingDirect
   const alwaysOn = isAlwaysThinkingClaude(model);
   const autoDirective = directive === "auto";
   const effort: ReasoningEffort | undefined = autoDirective ? undefined : directive;
+  // 关闭态里 Sonnet 5.5 要发 between_tools —— 它仍是"会产出 thinking 块"的一档
+  // （工具调用之间的进度文本以 thinking 块回来），所以输出上限按可能思考来留。
+  const betweenToolsOff = adaptive && !effort && !autoDirective && !alwaysOn && isBetweenToolsOffClaude(model);
   // Anthropic requires budget_tokens < max_tokens. When thinking may engage —
   // an explicit effort, an adaptive model left on "auto" (the server may then
-  // think on its own), or an always-on SKU whose "off" we can't actually honor
-  // — we reserve 10K for reasoning + ~6K for the visible response. Plain
+  // think on its own), an always-on SKU whose "off" we can't actually honor,
+  // or a between_tools off —
+  // we raise max_tokens to 16384 so CLAUDE_BUDGET 的每一档都严格小于它，思考预算
+  // 与可见回复都有空间。Plain
   // requests stay at the original 8096 cap.
-  const mayThink = !!effort || (adaptive && (autoDirective || alwaysOn));
+  const mayThink = !!effort || (adaptive && (autoDirective || alwaysOn || betweenToolsOff));
   const body: Record<string, unknown> = {};
   if (adaptive) {
     if (effort) {
       body.thinking = { type: "adaptive" };
       body.output_config = { effort };
-    } else if (!autoDirective && !alwaysOn) {
-      body.thinking = { type: "disabled" };
+    } else if (!autoDirective) {
+      // 三种官方关闭形态之一：always-on 的那几支整个字段不发；Sonnet 5.5 发
+      // between_tools（disabled 会被拒）；其余老世代发 disabled。
+      if (alwaysOn) {
+        // 不发 thinking —— 它照样会想，max_tokens 已经留了余量。
+      } else if (betweenToolsOff) {
+        body.thinking = { type: "between_tools" };
+      } else {
+        body.thinking = { type: "disabled" };
+      }
     }
   } else if (effort) {
     // Cap budget at ~12000 to leave room for the visible response under 16384.
@@ -747,25 +750,32 @@ export const buildClaudeThinkingBody = (model: string, directive: ThinkingDirect
   return { maxTokens: mayThink ? 16384 : 8096, body };
 };
 
-export const claude: TranslationService = withRelayHint(async (params) => {
+export const claude: TranslationService = async (params) => {
   const { apiKey, model, reasoningEffort, useRelay } = params;
-  const { effectiveSystemPrompt, prompt } = preparePrompts(params);
+  const { effectiveSystemPrompt, promptPrefix, promptSuffix } = preparePrompts(params);
 
   const key = requireApiKey("Claude", apiKey);
   const effectiveModel = model || defaultConfigs.claude.model!;
   const { maxTokens, body: thinkingBody } = buildClaudeThinkingBody(effectiveModel, reasoningEffort);
 
-  // `system` as a block array (not a plain string) is the form that accepts
-  // `cache_control` — required since Claude is the ONLY provider where prompt
-  // caching is off by default. Anthropic silently no-ops the marker when the
-  // prompt is below the cacheable threshold (~1024 tokens for Sonnet/Haiku,
-  // 2048 for Opus), so short default prompts cost nothing extra; long custom
-  // prompts (glossaries, style guides) get ~90% input discount on cache hits.
+  // Block arrays (not plain strings) are the form that accepts `cache_control`
+  // — required since Claude is the ONLY provider where prompt caching is off
+  // by default. Two breakpoints: the system prompt, and the STATIC prefix of
+  // the user message (everything the template renders before ${content} —
+  // with ${fullText} that is the whole episode, resent on every batch;
+  // subtitle-translator#53). The dynamic tail (glossary block + content) stays
+  // unmarked. Anthropic silently no-ops a marker below the per-model cacheable
+  // minimum, so short prompts cost nothing extra; hits are ~90% off input.
+  // Empty text blocks are rejected (400), hence the guards.
   // Doc: docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+  const userContent = [
+    ...(promptPrefix ? [{ type: "text", text: promptPrefix, cache_control: { type: "ephemeral" } }] : []),
+    ...(promptSuffix ? [{ type: "text", text: promptSuffix }] : []),
+  ];
   const requestBody: Record<string, unknown> = {
     model: effectiveModel,
     system: [{ type: "text", text: effectiveSystemPrompt, cache_control: { type: "ephemeral" } }],
-    messages: [{ role: "user", content: prompt }],
+    messages: [{ role: "user", content: userContent }],
     max_tokens: maxTokens,
     ...thinkingBody,
   };
@@ -790,4 +800,4 @@ export const claude: TranslationService = withRelayHint(async (params) => {
     signal: params.signal,
   });
   return getClaudeContent(data);
-}, "claude");
+};

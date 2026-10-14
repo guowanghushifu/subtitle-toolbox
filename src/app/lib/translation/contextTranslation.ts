@@ -10,7 +10,7 @@ const MARKER_CLEANUP_RE = /\[\/?(TRANSLATE(_\d+)?|TRANSLTranslate_\d+|CONTEXT)\]
 /**
  * Clean translation content by removing markers
  */
-export const cleanTranslatedContent = (content: string): string => {
+const cleanTranslatedContent = (content: string): string => {
   return content.replace(MARKER_CLEANUP_RE, "").trim();
 };
 
@@ -98,9 +98,8 @@ export const prefillFromLineCache = async (
 /**
  * Single pre-compiled regex matches every `[TRANSLATE_N]…[/TRANSLATE_N]` (and
  * the `TRANSLTranslate` typo variant — see MARKER_CLEANUP_RE) in one pass.
- * Previously this used `new RegExp(...)` inside a loop of `expectedCount`
- * iterations: a 1000-line subtitle at batchSize=50 allocated 1000 RegExp
- * objects across the run. Now one shared instance handles all batches.
+ * 正则放在模块级预先编译、全批复用：放进逐批循环里就是每批重新编译一次，
+ * 白花钱却不改变结果。
  *
  * Capture groups:
  *   $1 — line number (matched against expectedCount to bucket into results)
@@ -245,7 +244,7 @@ export const extractTranslatedLinesWithNumbers = (response: string, expectedCoun
 /**
  * Build context-aware translation prompt — wraps the batch instructions around
  * the user's template WITHOUT consuming the ${content} placeholder: the marker
- * block (user-controlled text) is inserted LAST by getAIModelPrompt's
+ * block (user-controlled text) is inserted LAST by getAIModelPromptParts's
  * function-form replacement at the service layer. Embedding it here would (a)
  * run it through String.replace's GetSubstitution ($$ → $, LaTeX corruption)
  * and (b) expose it to the service layer's template-variable pass (a literal
@@ -310,8 +309,8 @@ export const buildContextPrompt = (baseUserPrompt: string, batchSize: number, do
   const ctx = CONTEXT_DESCRIPTIONS[documentType];
 
   // Function-form replacement + the trailing literal ${content}: the actual
-  // marker block is substituted by getAIModelPrompt LAST, after every template
-  // variable has already been resolved (see utils.ts getAIModelPrompt).
+  // marker block is substituted by getAIModelPromptParts LAST, after every template
+  // variable has already been resolved (see utils.ts getAIModelPromptParts).
   //
   // The format example below uses the literal X placeholder, NOT a concrete
   // digit. A digit (e.g. `[TRANSLATE_0]translation[/TRANSLATE_0]`) is parseable by

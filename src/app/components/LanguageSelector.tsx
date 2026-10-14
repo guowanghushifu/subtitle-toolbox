@@ -8,7 +8,7 @@ import { useTranslations } from "next-intl";
 import { useLanguageOptions, filterLanguageOption } from "@/app/components/languages";
 import { LANGUAGE_GROUPS, LANGUAGE_PRESETS } from "@/app/lib/translation";
 import { useIsMobile } from "@/app/hooks/useIsMobile";
-import { useRecentLanguages } from "@/app/hooks/useRecentLanguages";
+import { useLocalStorage } from "@/app/hooks/useLocalStorage";
 
 const { Text } = Typography;
 
@@ -47,7 +47,12 @@ const LanguageSelector = ({ sourceLanguage, targetLanguage, targetLanguages, mul
   const { sourceOptions, targetOptions } = useLanguageOptions();
   const isMobile = useIsMobile();
   const { token } = theme.useToken();
-  const { recentLanguages, pushRecentLanguage } = useRecentLanguages();
+  // 最近 5 个选过的语言置顶(122 条里免得翻找);auto 不算语言。重选视为"最新":去重后前插。
+  const [recentLanguages, setRecentLanguages] = useLocalStorage<string[]>("translation-recentLanguages", []);
+  const pushRecentLanguage = (code: string) => {
+    if (!code || code === "auto") return;
+    setRecentLanguages((prev) => [code, ...prev.filter((c) => c !== code)].slice(0, 5));
+  };
   const [searchValue, setSearchValue] = useState("");
 
   // Wrap the prop callback so single-select picks land in the recent list.
@@ -245,8 +250,11 @@ const LanguageSelector = ({ sourceLanguage, targetLanguage, targetLanguages, mul
         border: `1px solid ${token.colorBorderSecondary}`,
         borderRadius: token.borderRadiusLG,
       }}>
-      <Row gutter={8} align="bottom" wrap={false}>
-        <Col flex="1" style={{ minWidth: 0 }}>
+      {/* <768px(antd md 以下)源/目标改为上下两行。并排时每个 Select 只分到
+          约 115px,「英语 (English)」「阿拉伯语 (العربية)」一律截成
+          「英语 (Engl…」—— 截掉的正是这个工具的主控件正在显示的值。 */}
+      <Row gutter={[8, 8]} align="bottom" wrap={isMobile}>
+        <Col flex={isMobile ? "1 1 100%" : "1"} style={{ minWidth: 0 }}>
           <Form.Item label={t("sourceLanguage")} className="!mb-0">
             <Select
               value={sourceLanguage}
@@ -262,8 +270,11 @@ const LanguageSelector = ({ sourceLanguage, targetLanguage, targetLanguages, mul
             />
           </Form.Item>
         </Col>
+        {/* 折行后交换按钮自成一行、居中 —— 上下两个选择器之间,与 Google
+            翻译 / DeepL 的手机版同形。让它跟目标语言挤在同一行会把「目标
+            语言」这个标签顶出一段无缘由的缩进。 */}
         {handleSwapLanguages && (
-          <Col flex="none" style={{ paddingBottom: 1 }}>
+          <Col flex={isMobile ? "1 1 100%" : "none"} style={{ paddingBottom: 1, textAlign: isMobile ? "center" : undefined }}>
             <Tooltip title={`${t("sourceLanguage")} ⇄ ${t("targetLanguage")}`} placement="top">
               <Button
                 type="text"

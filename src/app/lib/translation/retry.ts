@@ -4,7 +4,7 @@
 // this file must stay importable from Node (CLI/server) — the barrels carry
 // "use client" / browser-only modules (file-saver) that a Node entry must not pull.
 import { LLM_MODELS } from "./registry";
-import { RELAY_HINT_MARKER, RELAY_BASE_INVALID_MARKER } from "./services/shared";
+import { RELAY_HINT_MARKER, RELAY_BASE_INVALID_MARKER, CORS_HINT_MARKER } from "./services/shared";
 import { isAbortError, isCascadedAbort } from "@/app/utils/errorUtils";
 
 // MT-categorized services that actually delegate to an LLM runtime under the
@@ -30,7 +30,6 @@ export interface RetryConfig {
 
 export interface UserRetryConfig {
   retryCount?: number;
-  requestTimeoutSec?: number; // per-request timeout, in seconds
 }
 
 // Extract status and message from error once, reuse across checks
@@ -71,20 +70,22 @@ export const isDefiniteAuthFailure = (error: unknown): boolean => {
 
 /**
  * Errors that retrying won't fix — bail out immediately so the user isn't stuck
- * at 0% for 30-60s of doomed retries. These are thrown by service layers when the
+ * at 0% through a long run of doomed retries. These are thrown by service layers when the
  * next attempt will fail the same way — notably the shared CORS → "enable API
- * Relay" rewrite (withRelayHint in services/llm.ts), which fires for EVERY
+ * Relay" rewrite (withNetworkHint in services/index.ts), which fires for EVERY
  * relay-capable provider (not just DeepSeek) on a network/CORS TypeError with
- * relay off. The relay entry derives from RELAY_HINT_MARKER (services/shared.ts)
- * — the same constant embedded in every relay-remediation message — so rewording
- * a message can't silently break this classification. The Chinese entry is a
- * redundant second net over the same messages' zh half.
+ * relay off. CORS_HINT_MARKER is that same wrapper's OTHER remediation: a
+ * user-supplied endpoint the relay can't serve (no CORS headers, or plain
+ * unreachable) — neither self-heals inside a retry window either.
+ * Both derive from a constant (services/shared.ts) embedded in every such
+ * message — so rewording a message can't silently break this classification.
+ * The Chinese entry is a redundant second net over the same messages' zh half.
  *
  * "max_tokens reached" is the marker getOpenAICompatContent throws when a
  * response has finish_reason==="length" — same input + same max_tokens
  * truncates at the same boundary every time, so retries are pure waste.
  */
-const NON_RETRYABLE_MESSAGES = [RELAY_HINT_MARKER.toLowerCase(), "请在 api 设置中开启", "max_tokens reached", RELAY_BASE_INVALID_MARKER.toLowerCase()];
+const NON_RETRYABLE_MESSAGES = [RELAY_HINT_MARKER.toLowerCase(), "请在 api 设置中开启", "max_tokens reached", RELAY_BASE_INVALID_MARKER.toLowerCase(), CORS_HINT_MARKER.toLowerCase()];
 
 /**
  * Check if error is retryable (server errors or rate limits).
@@ -100,9 +101,8 @@ export const isRetryableError = (error: unknown): boolean => {
   // Aborts are non-recoverable by retry:
   //   - AbortError: per-request timeout fired (createTimeoutController's
   //     setTimeout → controller.abort). Next attempt has its own fresh
-  //     timeout but will hit the same upstream slowness — at 180s × 3
-  //     attempts that's 9 minutes of dead waiting before the user sees
-  //     anything. Fast-fail instead.
+  //     timeout but will hit the same upstream slowness — 最坏要等满
+  //     requestTimeout × 尝试次数 的乘积才见到失败，不如快失败。
   //   - "Translation aborted": shared abortControllerRef tripped (auth error
   //     in a peer). pRetry's pre-attempt guard would re-throw the same
   //     message — pointless retry loop.
@@ -212,8 +212,7 @@ export const abortableSleep = (ms: number, signal?: AbortSignal): Promise<void> 
 type GateState = { until: number; cooldownMs: number };
 const gateStates = new Map<string, GateState>();
 
-// 业界惯例对齐(Google API client / AWS SDK / OpenAI cookbook):base ~1s、
-// factor 2、cap 60s、优先尊重 Retry-After。1s 起步 = 快速试探恢复;真没
+// 通用指数退避形态：base ~1s、factor 2、cap 60s、优先尊重 Retry-After。1s 起步 = 快速试探恢复;真没
 // 恢复会沿 1→2→4→…→60s 自动爬升,不会反复轰炸。
 export const RATE_LIMIT_BASE_COOLDOWN_MS = 1_000;
 export const RATE_LIMIT_MAX_COOLDOWN_MS = 60_000;
@@ -222,23 +221,6 @@ const ESCALATION_WINDOW_MS = 30_000;
 // 立刻二次 429。每个等待者随机多等 0–1s,把恢复瞬间摊开(AWS "full jitter"
 // 的同款动机,作用在共享闸的出口侧)。冷却期外到达的请求不付此开销。
 export const RATE_LIMIT_RESUME_JITTER_MS = 1_000;
-
-// Same rejection message as the run-abort path ("Translation aborted") so the
-// existing classification chain (isCascadedAbort → silent, non-retryable)
-// handles a mid-wait cancel without new plumbing.
-const abortableDelay = (ms: number, signal?: AbortSignal): Promise<void> =>
-  new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(new Error("Translation aborted"));
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(new Error("Translation aborted"));
-    };
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
 
 export const rateLimitGate = {
   /**
@@ -251,7 +233,10 @@ export const rateLimitGate = {
     for (;;) {
       const remaining = (gateStates.get(method)?.until ?? 0) - Date.now();
       if (remaining <= 0) return;
-      await abortableDelay(remaining + Math.random() * RATE_LIMIT_RESUME_JITTER_MS, signal);
+      await abortableSleep(remaining + Math.random() * RATE_LIMIT_RESUME_JITTER_MS, signal);
+      // Same rejection message as the run-abort path so the existing classification
+      // chain (isCascadedAbort → silent, non-retryable) handles a mid-wait cancel.
+      if (signal?.aborted) throw new Error("Translation aborted");
     }
   },
 

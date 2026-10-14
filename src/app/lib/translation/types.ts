@@ -10,30 +10,18 @@ export interface TranslationProvider {
 // for user-supplied strings while preserving completions.
 export type TranslationMethod = keyof typeof import("./registry").defaultConfigs | (string & {});
 
-export interface TranslateTextParams {
+
+/**
+ * 一次翻译请求的全部参数 = provider 配置里会随请求发出的那部分(Omit 掉纯编排旋钮)+ 本次请求特有的字段。
+ * 字段语义见 TranslationConfig，这里不重抄。
+ */
+export interface TranslateTextParams extends Omit<TranslationConfig, "chunkSize" | "delayTime" | "batchSize" | "contextBatchSize" | "contextWindow" | "thinkingEffort"> {
   text: string;
   cacheSuffix: string;
   translationMethod: string;
   targetLanguage: string;
   sourceLanguage: string;
   useCache?: boolean;
-  apiKey?: string;
-  region?: string;
-  url?: string;
-  model?: string;
-  apiVersion?: string;
-  folderId?: string; // Optional: Yandex AI Studio folder ID — per-tenant scope assembled into model URIs (gpt://<folderId>/<model>)
-  temperature?: number;
-  // Cap on model output tokens. Undefined / 0 = no cap (vendor default).
-  // Primary use case: local Ollama small models that hallucinate into repeating
-  // loops — capping max_tokens at a sane value (e.g. 2048) lets the loop
-  // self-terminate at the cap, surface as a (likely truncated) response, and
-  // hand control back to retry/error flow instead of hanging until requestTimeoutSec.
-  maxTokens?: number;
-  systemPrompt?: string;
-  userPrompt?: string;
-  sendSystemPrompt?: boolean; // When false, omit the system message (Custom OpenAI-compat — Gemma-style chat templates rejecting system role)
-  useRelay?: boolean;
   /**
    * Origin of the relay to use when `useRelay` is on. Empty/absent = the
    * built-in one. GLOBAL, not per-provider: it travels beside `useRelay`
@@ -41,6 +29,17 @@ export interface TranslateTextParams {
    * serves every provider under the same /api/{provider} contract.
    */
   relayBase?: string;
+  /**
+   * 本轮翻译的会话 id（**每轮一个、轮内稳定**）。流水线在 `runTranslateLines` 里生成一次，
+   * 之后本轮的每个请求都带同一个值。只有声明了 `sessionHeader` 的 provider 会用到它
+   * （哪些 provider 声明了，以 registry 为准）。
+   *
+   * ⚠ 为什么必须是「每轮」而不是常量或每请求随机：
+   *   - 常量 → 等于告诉上游"几千个不相关的对话是同一个会话"，恰是它在监控的那类异常流量；
+   *   - 每请求随机 → 拿不到任何 routing / prompt caching 收益（上游要的正是"同一轮对话
+   *     稳定"），还多一份噪声。
+   */
+  sessionId?: string;
   // Thinking directive. An effort (low/medium/high) = thinking ON at that level;
   // the "auto" sentinel = OMIT the param and follow the server default; undefined =
   // the DEFAULT (no user entry) = thinking OFF, i.e. send the provider's explicit
@@ -49,12 +48,17 @@ export interface TranslateTextParams {
   // The "auto" escape exists for custom models whose disable param a STRICT provider
   // would 422 (the user picks Auto to omit instead).
   reasoningEffort?: ThinkingDirective;
-  domains?: string; // Optional: domains setting for Qwen-MT
-  // Active glossary terms in the provider's native wire shape. Currently only
-  // Qwen-MT consumes them (translation_options.terms — in-model terminology
-  // intervention); LLM services get the glossary via the systemPrompt block
-  // instead, composed by the orchestrator before the params are built.
+  // Active glossary terms in the provider's native wire shape —— 消费方是服务实现，
+  // 逐 SKU 的线格式见 services/traditional.ts 的 qwenMt（translation_options.terms，
+  // 模型内术语干预）；其余 LLM 服务经 `glossaryBlock` 拿术语。
   glossaryTerms?: Array<{ source: string; target: string }>;
+  // Per-request glossary prompt fragment (only the terms this text contains),
+  // composed by the orchestrator. LLM services place it on the DYNAMIC side of
+  // the user message — after the static prefix, before the content. It must
+  // never be folded into systemPrompt: system heads the provider cache prefix,
+  // and a per-request block there defeats prefix caching for every provider
+  // (subtitle-translator#53).
+  glossaryBlock?: string;
   fullText?: string; // Optional: complete text for ${fullText} variable
   signal?: AbortSignal; // Optional: for request cancellation
 }
@@ -96,11 +100,15 @@ export interface TranslationConfig {
   url?: string;
   region?: string;
   model?: string;
-  apiVersion?: string;
-  /** Yandex AI Studio folder ID. See TranslateTextParams.folderId. */
+  /** Yandex AI Studio folder ID — per-tenant scope assembled into model URIs (gpt://<folderId>/<model>). */
   folderId?: string;
   temperature?: number;
-  /** See TranslateTextParams.maxTokens. Undefined / 0 = no cap. */
+  /**
+   * Cap on model output tokens. Undefined / 0 = no cap (vendor default). Primary use case: local
+   * Ollama small models that hallucinate into repeating loops — capping max_tokens at a sane value
+   * (e.g. 2048) lets the loop self-terminate at the cap, surface as a (likely truncated) response,
+   * and hand control back to retry/error flow instead of hanging until requestTimeoutSec.
+   */
   maxTokens?: number;
   chunkSize?: number;
   delayTime?: number;
@@ -109,6 +117,7 @@ export interface TranslationConfig {
   contextWindow?: number;
   systemPrompt?: string;
   userPrompt?: string;
+  /** When false, omit the system message (Custom OpenAI-compat — Gemma-style chat templates rejecting system role). */
   sendSystemPrompt?: boolean;
   useRelay?: boolean;
   /**
@@ -123,5 +132,6 @@ export interface TranslationConfig {
    * orchestrator derives it from this record at translate-time via deriveThinkingParams.
    */
   thinkingEffort?: Record<string, ThinkingDirective>;
+  /** Qwen-MT domains hint. */
   domains?: string;
 }

@@ -27,7 +27,7 @@ import { generateCacheKey, generateCacheSuffix } from "./cache";
 import { cleanTranslatedText, splitTextIntoChunks } from "./utils";
 import { DEFAULT_SYSTEM_PROMPT, DEFAULT_USER_PROMPT } from "./config";
 import { applyGlossaryToText, buildGlossaryPromptBlock, buildStrictGlossaryPromptBlock, filterTermsMatchingText, findGlossaryViolations, type GlossaryTerm } from "./glossary";
-import { getRetryConfig, rateLimitGate, abortableSleep, isAuthError, isRetryableError, DEFAULT_BATCH_SIZE, DEFAULT_RETRY_COUNT, DEFAULT_RETRY_TIMEOUT, type UserRetryConfig } from "./retry";
+import { getRetryConfig, rateLimitGate, abortableSleep, isAuthError, isRetryableError, DEFAULT_BATCH_SIZE, DEFAULT_RETRY_COUNT, DEFAULT_RETRY_TIMEOUT } from "./retry";
 // 自托管的那几家（llm / translategemma / milmmt）跑在本地运行时上，超时的主导
 // 原因不是网络/云服务，而是请求在单槽服务器上排队、或模型卡在复读循环，
 // 所以给专门的提示而不是通用的“服务慢，换一个”。
@@ -80,13 +80,6 @@ export interface PipelineDeps {
   onProgress?: (current: number, total: number) => void;
   /** One notice per 429 cooldown burst (rateLimitGate.trip returned true). */
   onRateLimit?: () => void;
-  /**
-   * Single-line standalone calls only: an auth error must ALSO abort the
-   * caller's shared run controller so peer lines in a tool-driven loop die too
-   * (inside translateLines the run controller is pipeline-internal and this is
-   * not needed).
-   */
-  onAuthAbort?: () => void;
   /** Run-scoped glossary snapshot (see the hook's glossarySnapshotRef). Absent = no glossary. */
   getGlossaryTerms?: (targetLang: string) => GlossaryTerm[];
   /**
@@ -118,9 +111,9 @@ export interface FailedLine {
    *
    * 存在的理由:软填的槽位装的是【未翻译的原文】,调用方的译后加工
    * (removeChars 等)绝不能碰它 —— 碰了就产出既非原文也非译文的东西,而
-   * 界面和 CLI 都刚刚承诺过"失败的行已保留原文"。此前调用方只能拿 `line`
-   * 去【反推】下标,三个调用方里有两个推错了(字幕/Markdown 直接整份套用,
-   * 只有 JSON handler 做对),所以由引擎直接给出,别再让每个调用方自己算。
+   * 界面和 CLI 都承诺了"失败的行已保留原文"。让调用方拿 `line` 去【反推】下标
+   * 曾在两个工具里推错过（整份套用译后加工，把保留的原文也改了），
+   * 所以由引擎直接给出,别再让每个调用方自己算。
    */
   index?: number;
 }
@@ -147,8 +140,7 @@ export type TranslateBatchMeta = {
   /**
    * 【出参】调用方传一个空 Set,引擎把本次软填(保留原文)的槽位下标写进去。
    *
-   * 为什么是出参而不是返回值:translateBatch 返回 string[],被三个工具页和四条
-   * 测试直接消费;而调用方【必须】知道哪些槽位装的是原文 —— 译后加工
+   * 为什么是出参而不是返回值:translateBatch 返回 string[],被多个工具页与测试直接消费;而调用方【必须】知道哪些槽位装的是原文 —— 译后加工
    * (removeChars)碰了它们就产出既非原文也非译文的东西,而界面同屏正说着
    * "失败的行已保留原文"。Set 出参既不改返回形状,也不引入"必须紧接着读某个
    * ref"的时序耦合。CLI 侧走 cliFormat 的 softFilledIndices(同一份语义)。
@@ -165,9 +157,9 @@ export type TranslateBatchMeta = {
  * 直接发 k 会在含空行的文件里指向别人家的行(空行数就是偏移量)。
  *
  * ⚠ `line`(物理源行号)【必须】带上,不能以"消费方手里有 meta.lineNumbers、
- * 让它自己映射"为由省掉 —— 那正是上一版的做法,而没有任何消费方真的去映射:
- * 面板于是打 contentLines 序数(cue #12),正下方失败面板打真实行号(47),
- * 两者同样式并排,用户照着面板跳过去落在时间轴上。同一份数据的两种坐标同屏
+ * 让它自己映射"为由省掉 —— 消费方并不会真的去映射:实时面板于是打 contentLines
+ * 序数,正下方失败面板打真实行号,两者同样式并排,用户照着面板跳过去落在别处。
+ * 同一份数据的两种坐标同屏
  * 出现,就得由【发出方】统一,不能指望每个消费方各自记得换算。
  */
 export interface LineTranslatedEvent {
@@ -219,12 +211,10 @@ export type PipelineRuntimeConfig = TranslationConfig & {
  * 批量路径的 runtime config 组装 —— 网页壳(useTranslationState translateBatch)
  * 与 CLI 壳(scripts/cli.ts buildConfig)共用。
  *
- * 它【是】PipelineRuntimeConfig 的唯一组装线。这句话曾经不成立:单行路径
- * translateSingleWithGlossary 与 JSONTranslator 的四个手写循环各自手拼 config,
- * 不受 RuntimeGlobals 的必填键约束 —— delayTime 就这么漏过一次且已上线(字幕/
- * Markdown 每行间隔 200ms、JSON 对同一个 provider 满速打)。现在 JSONTranslator
- * 经 translateBatch 走 translateLines,单行入口已删,新增全局旋钮时漏接
- * 【必然】编译失败,不再靠人记得。
+ * 它【是】PipelineRuntimeConfig 的唯一组装线：单行/批量路径都不得手拼 config。
+ * 手拼的后果是全局旋钮（如 delayTime）在某条路径上静默失效 —— 同一个 provider，
+ * 字幕/Markdown 有节流而 JSON 满速打。新增全局旋钮时漏接【必然】编译失败
+ * （RuntimeGlobals 全键必填），不再靠人记得。
  *
  * independent:调用方的翻译单元互相独立且必须逐单元往返(JSON 值 —— 内嵌换行
  * 是值的一部分)时置 true。它压住【两条】批处理路径:这里剥掉 chunkSize 挡住
@@ -301,12 +291,13 @@ type RunCtx = {
   cache?: PipelineCache;
   /** Resolved from deps.translate, else translateCore over deps.cache. */
   translate: (params: TranslateTextParams) => Promise<string>;
+  /** 本轮会话 id —— 声明了 sessionHeader 的 provider 会把它放进对应请求头。 */
+  sessionId: string;
   /** THIS run's abort controller — auth cascade target, chained from deps.signal. */
   run?: AbortController;
   shouldStop: () => boolean;
   onProgress?: (current: number, total: number) => void;
   onRateLimit?: () => void;
-  onAuthAbort?: () => void;
   getGlossaryTerms: (targetLang: string) => GlossaryTerm[];
   /** Live per-line stream (batch-level, from TranslateBatchMeta.onLineTranslated). */
   emitLine?: (result: LineTranslatedEvent) => void;
@@ -315,8 +306,15 @@ type RunCtx = {
   wasRateLimited: () => boolean;
 };
 
-/** Chain an internal run controller off the external signal; returns cleanup. */
-const chainSignal = (run: AbortController, external?: AbortSignal): (() => void) => {
+/**
+ * 每轮会话 id。优先 `crypto.randomUUID`（Node 19+ / 浏览器**安全上下文**都有），
+ * 退回随机串 —— 明文 http 自部署时 `crypto.randomUUID` 是 undefined，不兜住就是
+ * 整个翻译流程抛 "crypto.randomUUID is not a function"，为一个小字段崩掉主流程不划算。
+ */
+const newSessionId = (): string =>
+  typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+/** Chain an internal run controller off the external signal; returns cleanup. */const chainSignal = (run: AbortController, external?: AbortSignal): (() => void) => {
   if (!external) return () => {};
   if (external.aborted) {
     run.abort();
@@ -334,7 +332,7 @@ const HAS_TRANSLATABLE_CONTENT = /[a-zA-Z\p{L}]/u;
 
 // Services whose responses HTML-encode characters (Google NMT backends) —
 // the only ones whose output should be entity-unescaped. See translateCore.
-const HTML_ENCODING_METHODS: ReadonlySet<string> = new Set(["gtxFreeAPI", "google", "webgoogletranslate"]);
+const HTML_ENCODING_METHODS: ReadonlySet<string> = new Set(["gtxFreeAPI", "google"]);
 
 /**
  * Translate text using the specified method. Throws on error to allow retry
@@ -372,9 +370,9 @@ export const translateCore = async (params: TranslateTextParams, cache?: Pipelin
   // document semantics (&lt;div&gt; in an HTML-escaped doc became a real tag)
   // and cached the corrupted form.
   const cleanedText = HTML_ENCODING_METHODS.has(translationMethod) ? cleanTranslatedText(translatedText) : translatedText;
-  // Fire-and-forget cache write — failures swallowed in the cache impl,
-  // and the next read of this key is ≥1s later (retry interval) so the write
-  // has plenty of time to settle. Awaiting would add 5-50ms per line for nothing.
+  // Fire-and-forget cache write — failures swallowed in the cache impl, and the
+  // same key is next read only after the retry interval, so the write has time
+  // to settle. Awaiting each write would park the translation loop behind IDB.
   if (useCache && cache) {
     void cache.set(cacheKey, cleanedText);
   }
@@ -408,8 +406,7 @@ const translateSingle = async (text: string, cacheSuffix: string, config: Pipeli
 
   const retryCount = config.retryCount ?? DEFAULT_RETRY_COUNT;
   const requestTimeoutSec = config.requestTimeoutSec ?? DEFAULT_RETRY_TIMEOUT;
-  const userRetryConfig: UserRetryConfig = { retryCount, requestTimeoutSec };
-  const retryConfig = getRetryConfig(config.translationMethod, userRetryConfig);
+  const retryConfig = getRetryConfig(config.translationMethod, { retryCount });
   const timeoutMs = requestTimeoutSec * 1000;
 
   // Create per-request abort controller with timeout
@@ -434,7 +431,8 @@ const translateSingle = async (text: string, cacheSuffix: string, config: Pipeli
   // Build translate params - pick defined optional fields from config.
   // reasoningEffort is derived per-call from the thinkingEffort record
   // (presence of entry for current model = effort, absence = thinking off).
-  const optionalFields = ["useCache", "apiKey", "region", "url", "model", "apiVersion", "folderId", "temperature", "maxTokens", "systemPrompt", "userPrompt", "sendSystemPrompt", "useRelay", "relayBase", "domains"] as const;
+  // satisfies:每个名字必须真是 TranslateTextParams 的键,改名/删字段时这里编译失败,不再是第三份手抄清单。
+  const optionalFields = ["useCache", "apiKey", "region", "url", "model", "folderId", "temperature", "maxTokens", "systemPrompt", "userPrompt", "sendSystemPrompt", "useRelay", "relayBase", "domains"] as const satisfies readonly (keyof TranslateTextParams)[];
   const extras: Record<string, unknown> = {};
   const configRecord = config as unknown as Record<string, unknown>;
   for (const key of optionalFields) {
@@ -450,6 +448,8 @@ const translateSingle = async (text: string, cacheSuffix: string, config: Pipeli
   const effort = deriveThinkingParams(config.translationMethod, config);
   if (effort) extras.reasoningEffort = effort;
   if (fullText !== undefined) extras.fullText = fullText;
+  // 本轮会话 id 随每个请求一起走（provider 侧只在声明了 sessionHeader 时才发出去）。
+  extras.sessionId = ctx.sessionId;
 
   // Per-request glossary composition. The wire prompt carries ONLY the terms
   // this text actually contains — a 500-term glossary must not ride along on
@@ -457,15 +457,16 @@ const translateSingle = async (text: string, cacheSuffix: string, config: Pipeli
   // suffix: the block is a deterministic function of {text, full term set},
   // and the cache key already covers both (text via generateCacheKey, full
   // set via the caller's cacheSuffix).
+  // Travels as its own field, NOT appended to systemPrompt: system heads the
+  // provider's cache prefix, so a per-request block there broke prefix caching
+  // for every LLM provider (subtitle-translator#53). The service inserts it on
+  // the dynamic side of the user message, after the static prefix.
   if (LLM_MODELS.includes(config.translationMethod)) {
-    // Appending to an empty base would otherwise drop the default prompt:
-    // services treat a non-empty systemPrompt as "user configured" verbatim.
-    const base = config.systemPrompt?.trim() ? config.systemPrompt : DEFAULT_SYSTEM_PROMPT;
     if (config.strictGlossaryTerms?.length) {
-      extras.systemPrompt = base + buildStrictGlossaryPromptBlock(config.strictGlossaryTerms);
+      extras.glossaryBlock = buildStrictGlossaryPromptBlock(config.strictGlossaryTerms);
     } else {
       const matched = filterTermsMatchingText(ctx.getGlossaryTerms(config.targetLanguage), text);
-      if (matched.length > 0) extras.systemPrompt = base + buildGlossaryPromptBlock(matched);
+      if (matched.length > 0) extras.glossaryBlock = buildGlossaryPromptBlock(matched);
     }
   } else if (config.translationMethod === "qwenMt") {
     // Qwen-MT: native terminology intervention instead of a prompt block.
@@ -528,13 +529,8 @@ const translateSingle = async (text: string, cacheSuffix: string, config: Pipeli
 
           // Auth error → abort all concurrent requests OF THIS RUN. Aborting
           // a live ref instead would let a ghost task from a dead run kill
-          // a healthy successor run. onAuthAbort additionally trips the
-          // caller's SHARED controller on standalone single-line calls
-          // (tool-driven loops) — inside translateLines it is not set.
-          if (isAuthError(error)) {
-            run?.abort();
-            ctx.onAuthAbort?.();
-          }
+          // a healthy successor run.
+          if (isAuthError(error)) run?.abort();
           // 429 → 触发该服务的全局冷却(尊重服务器 Retry-After,否则
           // 1s→2s→…→60s 升级)。trip 仅在【开启】一轮冷却时返回 true
           // (同一波并发 429 只第一个生效),据此通知一次降速(onRateLimit)——
@@ -614,11 +610,10 @@ const enforceGlossaryOnLine = async (sourceLine: string, rawTranslated: string, 
     return first;
   } catch (error) {
     // auth 【必须向上抛】,这是本文件的既定约定(grep `isAuthError(` 可见其余抛出点)。
-    // 曾经这里一律吞掉,理由写的是「auth 中止已由 translateSingle 传给本 run 的
-    // controller」—— controller 确实被 abort 了,但错误的【身份】丢了:后续批次
-    // 全部短路成 `Translation aborted`,而工具层对它是 `if (isCascadedAbort) continue`
-    // ——静默。结果是过期的 key 配上开着的术语表,用户点翻译得到零输出、零 toast、
-    // 零失败面板,完全不知道 key 已经失效(WAF/CDN 返回 403 也同形)。
+    // 吞掉它会把错误的【身份】弄丢:后续批次全部短路成 `Translation aborted`,而工具层
+    // 对它是 `if (isCascadedAbort) continue` ——静默。结果是过期的 key 配上开着的术语表,
+    // 用户点翻译得到零输出、零 toast、零失败面板,完全不知道 key 已经失效
+    // (WAF/CDN 返回 403 也同形)。
     if (isAuthError(error)) throw error;
     // 其余(网络抖动 / 级联中止)不拖垮已成功的首译。
     return first;
@@ -758,7 +753,7 @@ const translateWithContext = async (
         {
           ...runtimeConfig,
           // The built prompt retains the literal ${content} placeholder — the
-          // marker block (params.text) is inserted LAST by getAIModelPrompt's
+          // marker block (params.text) is inserted LAST by getAIModelPromptParts's
           // function-form replacement, after all template variables resolved.
           userPrompt: buildContextPrompt(runtimeConfig.userPrompt ?? DEFAULT_USER_PROMPT, batchEnd - batchStart, documentType),
         },
@@ -831,7 +826,7 @@ const translateWithContext = async (
           // instead of a half-localized mix like "斯派克, hi".
           const enforced = await enforceGlossaryOnLine(batchSources[j], translatedBatch[j], cacheSuffix, runtimeConfig, ctx, fullText);
           translatedLines[batchStart + j] = enforced;
-          // 实时流:这一槽立刻可见,不等整批 20-60s 的请求全部回来。
+          // 实时流:这一槽立刻可见,不等整批请求全部回来。
           ctx.emitLine?.({ index: batchStart + j, original: batchSources[j], translation: enforced });
           // Cache the finalized line by its source text so a future run skips
           // it (see prefillFromLineCache above). Survives the batch-level purge
@@ -941,9 +936,8 @@ const translateWithContext = async (
 
     // Circuit breaker: when the provider is wholesale-down (quota-exhausted
     // 429, sustained outage), every cluster fails identically — without a
-    // breaker a 1000-line file would grind through ~100 sequential doomed
-    // pRetry cycles (~12-20 extra minutes + a request storm against an
-    // already rate-limited API) before the soft-fill finally runs. Three
+    // breaker,整份文件的每个簇都会烧完一轮注定失败的重试,再把海量补打请求
+    // 砸向一个已经限流的 API,最后才轮到 soft-fill。Three
     // consecutive clusters with ZERO newly-filled slots = systemic failure,
     // bail and let the soft-fill surface the failure panel. A breaker can't
     // misfire on healthy-but-spotty runs: any cluster that fills even one
@@ -978,8 +972,8 @@ const translateWithContext = async (
     }
   };
 
-  // Show progress immediately so users see the modal is alive (a single LLM
-  // batch can take 20-60s before the first in-loop updateProgress). On a
+  // Show progress immediately so users see the modal is alive (一次 LLM 批请求
+  // 可能跑很久才回到循环里更新进度)。On a
   // cache-heavy re-run, the blank pre-fill + per-line cache prefill have
   // already decided most slots — surface that at once so the bar jumps to
   // near-complete instead of sitting at ~0% through the prefill + first
@@ -994,13 +988,12 @@ const translateWithContext = async (
   // line-by-line mode uses the separate `batchSize` (see translateLines)
   // which is safe to run higher since each request is a single short
   // prompt. Defaults per provider:
-  //   - Cloud LLMs (claude, gemini, openai-compat, ...): 3 — under every
-  //     mainstream provider's concurrent cap (Claude paid 5-10, DeepSeek
-  //     30, Gemini generous). Free-tier users hitting 429 get caught by
-  //     pRetry + auto-retry.
+  //   - Cloud LLMs (claude, gemini, openai-compat, ...): 3 — 刻意压在主流云
+  //     provider 的并发上限以下（各家配额随厂商调价变化，不在这里誊数）。
+  //     免费档真撞 429 由 pRetry + 自动重试兜。
   //   - Custom LLM (Ollama local): 1 — Ollama runs inference single-threaded
-  //     by default, >1 concurrent would queue on the server and our 180s
-  //     requestTimeoutSec would fire on queued requests before they run.
+  //     by default, >1 concurrent would queue on the server and requestTimeoutSec
+  //     would fire on queued requests before they run.
   // Power users with proper paid tiers can raise contextBatchSize in
   // Advanced Settings for faster throughput.
   //
@@ -1089,7 +1082,7 @@ const translateWithContext = async (
       // line = real 1-based source position (meta.lineNumbers maps slot i back to
       // the physical line when contentLines is filtered/derived, else ordinal);
       // lang lets the panel tag which target this line failed under in batch runs.
-      if (original && original.trim()) failedLinesList.push({ text: original, line: meta?.lineNumbers?.[i] ?? i + 1, index: i, lang: runtimeConfig.targetLanguage, file: meta?.fileName });
+      if (original && original.trim()) failedLinesList.push({ text: original, line: failureLine(runtimeConfig, meta, i), index: i, lang: runtimeConfig.targetLanguage, file: meta?.fileName });
     }
   }
 
@@ -1153,11 +1146,14 @@ const runTranslateLines = async (
     cache: deps.cache,
     translate: resolveTranslate(deps),
     run: runController,
+    // 本轮会话 id：**在这里生成一次**，本轮所有请求共用（见 types.ts 里 sessionId 的注释）。
+    // 生成点选在这里而不是各请求处，是因为"会话"的边界就是一次 runTranslateLines ——
+    // 同一个文件/同一次点击的上下文批与逐行请求本来就属于同一轮对话，上游的 routing 与
+    // prompt caching 正是按这个粒度命中。
+    sessionId: newSessionId(),
     shouldStop: deps.shouldStop ?? (() => false),
     onProgress: deps.onProgress,
     onRateLimit: deps.onRateLimit,
-    // NOT deps.onAuthAbort: inside translateLines the run controller is
-    // pipeline-internal; aborting it already tears down every peer of THIS run.
     // 实时流的【唯一接缝】—— 两件横切的事都在这里做一遍,不在四个发射点各写
     // 一遍(发射点还会增加:现在是行路径 / 上下文批 / 上下文缓存补发 / chunk
     // 块,漏一个的症状都只在特定文件上才看得见):
@@ -1234,7 +1230,7 @@ const runTranslateLines = async (
       // Batched cache probe (ONE transaction) → indices that will hit cache.
       // baseDelay (default 200ms) exists to rate-limit REAL API calls; a cache
       // hit makes none, so throttling it just made a fully-cached re-run crawl
-      // (baseDelay × lines / concurrency — ~20s on a 1000-line file). Used
+      // (耗时量级 = baseDelay × 行数 / 并发)。Used
       // only to SKIP the delay below; the translate path is unchanged (the
       // per-line cache check inside translateSingleWithGlossary still runs).
       const cacheHitIndices = new Set<number>();
@@ -1474,7 +1470,7 @@ const runTranslateLines = async (
     // non-blank line by construction, so no blank ever shows up in the panel.
     for (const k of failedK) {
       const i = sourceIdx[k];
-      failedChunkLines.push({ text: contentLines[i], line: meta?.lineNumbers?.[i] ?? i + 1, index: i, lang: config.targetLanguage, file: meta?.fileName });
+      failedChunkLines.push({ text: contentLines[i], line: failureLine(config, meta, i), index: i, lang: config.targetLanguage, file: meta?.fileName });
     }
     failures.push(...failedChunkLines);
 
@@ -1503,7 +1499,7 @@ const runTranslateLines = async (
       const unusable = failedK.has(k) || translated === undefined || translated.trim() === "";
       out[sourceIdx[k]] = unusable ? contentLines[sourceIdx[k]] : applyGlossary(ctx, translated, config.targetLanguage);
       // 兜底:上面的按块对齐理应让 undefined 不再出现,真出现了也必须记一条
-      // 失败 —— 静默保留原文正是上一轮要修掉的东西。failedK 的行已记过。
+      // 失败 —— 静默保留原文正是这里要防的失败形态。failedK 的行已记过。
       if (unusable && !failedK.has(k)) {
         const i = sourceIdx[k];
         failures.push({ text: contentLines[i], line: failureLine(config, meta, i), index: i, lang: config.targetLanguage, file: meta?.fileName });
@@ -1522,7 +1518,7 @@ const runTranslateLines = async (
  * Core reachability probe: runs one real "Hello, world!" translation and THROWS
  * on failure, so callers can classify the error (transient vs definitive). Used
  * by the translator's smart pre-flight gate (web validate(), CLI pre-flight);
- * testTranslation wraps it for the boolean API the "Test Connection" buttons use.
+ * testTranslationWithTimeout wraps it for the "Test Connection" buttons.
  * 住在 pipeline(而非 barrel)是为了 Node 可用:barrel 带 "use client" 与
  * IndexedDB,CLI 导不进来。
  */

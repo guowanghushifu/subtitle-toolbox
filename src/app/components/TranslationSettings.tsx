@@ -20,9 +20,11 @@ import {
   canDisableThinkingForModel,
   classifyEndpointUrl,
   migrateConfig,
-  categorizedOptions,
+  getVisibleCategorizedOptions,
+  isUiHiddenMethod,
   wireUrlNormalizer,
-  usesBuiltinRelay,
+  relayWouldServe,
+  isPrivateRelayTarget,
   LLM_RELAY_BASE,
   isValidRelayBase,
   supportsGlossary,
@@ -37,6 +39,7 @@ import Section from "@/app/components/styled/Section";
 import GlobalPromptsPanel from "@/app/components/GlobalPromptsPanel";
 import GlossaryManager from "@/app/components/glossaryManager/GlossaryManager";
 import { useIsMobile } from "@/app/hooks/useIsMobile";
+import { useShowHiddenProviders } from "@/app/hooks/translation/useShowHiddenProviders";
 
 const { Text, Link } = Typography;
 const { TextArea } = Input;
@@ -81,7 +84,23 @@ const ServiceSettingsForm = ({ service }: { service: string }) => {
   // 自定义地址 + 中转的组合是合理诉求:自建 Worker 的用户把自己的地址加进
   // PROVIDER_URLS 就能用;对内置公共中转,引擎会对这种组合退回直连且不外发
   // 地址(registry.relayWouldServe),所以开关开着也不会有请求打进公共 Worker。
-  const urlKind = classifyEndpointUrl(service, config?.url as string | undefined).kind;
+  // 中转开关下方的说明必须说【真话】:判据是引擎自己的 relayWouldServe —— 拨这根
+  // 开关到底会不会改变请求去向。「不会」有三种,成因不同,文案要分开:
+  //   ① 环回/内网地址(本地运行时芯片 127.0.0.1 等)→ 中转到不了那里,填自建中转
+  //      也没用(远端 Worker 眼里的 127.0.0.1 是它自己)。
+  //   ② 内置公共中转没有这个 provider 的路由(Custom/llm 就是这一类)→ 退回直连,
+  //      填自建中转地址才开始生效。
+  //   ③ 其余的「填了自定义网关地址」→ 沿用既有的自定义地址提示。
+  // ⚠ 旧判据是 `urlKind==="custom" && 内置中转`。它对三种情况说错话:
+  //   · Custom 的任意自填网关 → 旧判据碰巧对了(判 custom),但理由是错的;
+  //   · Custom 的 Together / Fireworks 芯片 → 判 variant,旧判据显示"勾上就能绕过
+  //     CORS",而当时内置中转根本没有 llm 路由,勾了仍是直连(现在有路由了,巧合变对);
+  //   · Local runtime 芯片(127.0.0.1 等)→ 判 variant,同样宣称能中转,而它【永远】
+  //     不能 —— 远端 Worker 够不着用户的环回。
+  // 对着一个拨了也不会生效的开关说「勾上就能用」,比不提示更糟,所以一律改问
+  // relayWouldServe —— 那是引擎自己的判据,文案与行为由构造保证不叉开。
+  const relayWouldRoute = relayWouldServe(service, { url: config?.url as string | undefined, relayBase });
+  const relayExtra = relayWouldRoute ? t("useRelayTooltip") : isPrivateRelayTarget(service, config?.url as string | undefined) ? t("useRelayLocalOnly") : t("useRelayCustomUrl");
   // 空 = 用内置中转,不算错;非空但不合法(漏 https://、javascript: 等)才标红。
   const relayBaseInvalid = relayBase.trim() !== "" && !isValidRelayBase(relayBase);
 
@@ -355,8 +374,8 @@ const ServiceSettingsForm = ({ service }: { service: string }) => {
       )}
 
       {/* ========== Credentials group ========== */}
-      {(config?.url !== undefined || config?.apiKey !== undefined || config?.region !== undefined || config?.folderId !== undefined || config?.apiVersion !== undefined || config?.useRelay !== undefined) && (
-        <Section variant="neutral" style={{ marginTop: 16 }} noGap>
+      {(config?.url !== undefined || config?.apiKey !== undefined || config?.region !== undefined || config?.folderId !== undefined || config?.useRelay !== undefined) && (
+        <Section style={{ marginTop: 16 }} noGap>
           <Text strong style={{ display: "block", marginBottom: 8 }}>
             {t("credentialsGroup")}
           </Text>
@@ -386,6 +405,12 @@ const ServiceSettingsForm = ({ service }: { service: string }) => {
                         : t("urlOptionalExtra")
                 }
                 required={URL_IS_PRIMARY_CRED.has(service) || service === "azureopenai"}>
+                {/* Form.Item 默认装单控件,这里要放端点芯片 + URL 输入两块。
+                    用 <Flex vertical> 把两者纵向并列,gap 接管间距、vertical
+                    接管换行 —— 与本文件顶部主区(L897)同一模式。Space wrap
+                    本身仍是 inline-flex,被 Flex 块级化后会自然占满整行,Input
+                    落到下一行。 */}
+                <Flex vertical gap={8} style={{ width: "100%" }}>
                 {(() => {
                   const endpoints = getProviderEndpoints(service);
                   // 判据是「点了能不能改变什么」:
@@ -410,7 +435,7 @@ const ServiceSettingsForm = ({ service }: { service: string }) => {
                   // “怎么把这个服务跑起来”—— 而这正是这条路的第一道坑。
                   const activeDocs = endpoints.find((ep) => ep.url === activeEndpoint)?.docs;
                   return (
-                    <Space wrap size={[4, 8]} style={{ marginBottom: 4 }}>
+                    <Space wrap size={[4, 8]}>
                       {endpoints.map((ep) => {
                         const isActive = activeEndpoint === ep.url;
                         // 默认端点写回 ""(而不是完整 URL):cache.ts 把非空
@@ -471,10 +496,10 @@ const ServiceSettingsForm = ({ service }: { service: string }) => {
                     // blur 补全 = wireUrlNormalizer(registry):对每个 service 用
                     // 【引擎实际会用的】补全器 —— claude 补 /v1/messages,OpenAI-compat
                     // 系补 /chat/completions,私有协议(deepl/azureopenai…)原样返回
-                    // 即不补全。此前是手维护清单,claude/yandex 漏在外面:界面留着
+                    // 即不补全。别退回手维护的补全清单——漏一家就是界面留着
                     // bare host、引擎默默补全,界面所见 ≠ 线上所打。
-                    // 【不再自动翻中转开关】—— 那个功能曾经存在,是三轮评审里 bug
-                    // 最密集的一处(死守卫、focus 追踪、芯片竞态、relayBase 盲区),
+                    // 【不做自动翻中转开关】—— 那个开关会引入死守卫、focus 追踪、
+                    // 芯片竞态、relayBase 盲区一类连环 bug,
                     // 而它防的事故引擎层已兜住:自定义地址 + 内置公共中转由
                     // registry.relayWouldServe 退回直连、地址不外发;开关开着但无效时,
                     // 开关下方的 useRelayCustomUrl 静态文案已把实情写明。开关状态
@@ -490,6 +515,7 @@ const ServiceSettingsForm = ({ service }: { service: string }) => {
                   aria-label={`API ${t("url")}`}
                   spellCheck={false}
                 />
+                </Flex>
               </Form.Item>
             )}
             {config?.apiKey !== undefined && (
@@ -551,11 +577,6 @@ const ServiceSettingsForm = ({ service }: { service: string }) => {
                 />
               </Form.Item>
             )}
-            {config?.apiVersion !== undefined && (
-              <Form.Item label={`LLM API Version`} extra={`${tCommon("example")}: 2025-11-18`} style={{ marginBottom: config?.useRelay !== undefined ? 24 : 0 }}>
-                <Input value={config.apiVersion as string | undefined} onChange={(e) => handleConfigChange(service, "apiVersion", e.target.value)} aria-label="LLM API Version" spellCheck={false} />
-              </Form.Item>
-            )}
             {/* 这两个开关的说明文字由 antd Form.Item 渲染，不在我们的 JSX 里，
                 没法像别处那样用 <label> 整行包住（design-system A5b）。改用 antd
                 自己的关联方式：Form.Item htmlFor + Switch id —— 生成的
@@ -563,11 +584,10 @@ const ServiceSettingsForm = ({ service }: { service: string }) => {
                 因为设置面板会为每个 provider 各渲染一份，裸 id 会重复。 */
             }
             {config?.useRelay !== undefined && (
-              // 永不置灰:开关与「填哪个地址」正交。填了自定义地址时换一句提示,
-              // 说明这时开关对内置公共中转不起作用(该地址不在它的 allowlist 里,
-              // 引擎会退回直连、也不会把地址发过去 —— 见 registry.relayWouldServe),
-              // 要经中转就填自建中转地址。是提示,不是禁用:填了自建地址后开关照常生效。
-              <Form.Item label={t("useRelay")} htmlFor={`${service}-useRelay`} extra={urlKind === "custom" && usesBuiltinRelay(relayBase) ? t("useRelayCustomUrl") : t("useRelayTooltip")} style={{ marginBottom: config.useRelay ? 24 : 0 }}>
+              // 永不置灰:开关与「填哪个地址」正交。提示文案按 relayWouldServe 的
+              // 真实结论分三种(见上方 relayExtra 的定义),要经中转就填自建中转地址。
+              // 是提示,不是禁用:填了自建地址后开关照常生效。
+              <Form.Item label={t("useRelay")} htmlFor={`${service}-useRelay`} extra={relayExtra} style={{ marginBottom: config.useRelay ? 24 : 0 }}>
                 <Switch id={`${service}-useRelay`} checked={config.useRelay as boolean | undefined} onChange={(checked) => handleConfigChange(service, "useRelay", checked)} aria-label={t("useRelay")} />
               </Form.Item>
             )}
@@ -596,7 +616,7 @@ const ServiceSettingsForm = ({ service }: { service: string }) => {
 
       {/* ========== Model group ========== */}
       {(config?.model !== undefined || config?.temperature !== undefined || (isLLMModel && config?.maxTokens !== undefined) || showThinkingControl || config?.domains !== undefined || config?.sendSystemPrompt !== undefined) && (
-        <Section variant="neutral" style={{ marginTop: 16 }} noGap>
+        <Section style={{ marginTop: 16 }} noGap>
           <Text strong style={{ display: "block", marginBottom: 8 }}>
             {t("modelGroup")}
           </Text>
@@ -637,8 +657,8 @@ const ServiceSettingsForm = ({ service }: { service: string }) => {
                       // Dual-line option render: friendly name (with `default`
                       // tag for the spec's defaultModel) on top, SKU below in
                       // dim small text. Closes the visual gap between the
-                      // dropdown label ("Claude Sonnet 4.6") and what lands in
-                      // the input field ("claude-sonnet-4-6") — users see the
+                      // dropdown label ("Claude Sonnet X.Y") and what lands in
+                      // the input field ("claude-sonnet-x-y") — users see the
                       // correspondence at a glance.
                       optionRender={(oriOption) => {
                         const value = String(oriOption.value ?? "");
@@ -673,7 +693,7 @@ const ServiceSettingsForm = ({ service }: { service: string }) => {
                 );
               })()}
             {config?.temperature !== undefined && (
-              <Form.Item label="Temperature" extra={t("temperatureExtra")}>
+              <Form.Item label={t("temperature")} extra={t("temperatureExtra")}>
                 <InputNumber
                   min={0}
                   max={1.99}
@@ -681,7 +701,7 @@ const ServiceSettingsForm = ({ service }: { service: string }) => {
                   value={config.temperature as number | undefined}
                   onChange={(value) => handleConfigChange(service, "temperature", value ?? 0)}
                   className="w-full"
-                  aria-label="Temperature"
+                  aria-label={t("temperature")}
                 />
               </Form.Item>
             )}
@@ -744,7 +764,7 @@ const ServiceSettingsForm = ({ service }: { service: string }) => {
                   value={config.domains as string | undefined}
                   onChange={(e) => handleConfigChange(service, "domains", e.target.value)}
                   autoSize={{ minRows: 2, maxRows: 6 }}
-                  aria-label="Domains"
+                  aria-label={t("qwenMtDomains")}
                 />
               </Form.Item>
             )}
@@ -768,7 +788,7 @@ const ServiceSettingsForm = ({ service }: { service: string }) => {
         (isLLMModel && config?.contextWindow !== undefined) ||
         (isLLMModel && config?.contextBatchSize !== undefined) ||
         config?.delayTime !== undefined) && (
-        <Section variant="neutral" style={{ marginTop: 16 }} noGap>
+        <Section style={{ marginTop: 16 }} noGap>
           <Text strong style={{ display: "block", marginBottom: 8 }}>
             {t("callParamsGroup")}
           </Text>
@@ -849,6 +869,7 @@ const TranslationSettings = () => {
   const isMobile = useIsMobile();
   const { translationMethod, setTranslationMethod, translationConfigs } = useTranslationContext();
   const isLLMModel = LLM_MODELS.includes(translationMethod);
+  const [showHiddenProviders, setShowHiddenProviders] = useShowHiddenProviders();
 
   // Chips row = every service whose getConfigStatus is non-"needs-config",
   // plus the currently-selected one. getConfigStatus is the same predicate the
@@ -864,10 +885,13 @@ const TranslationSettings = () => {
   const activeServices = useMemo(
     () =>
       TRANSLATION_PROVIDERS.filter((s) => {
+        // hidden provider(订阅套餐端点)默认不进 chips;当前已选中时例外,
+        // 否则用户看不到自己在用什么。
+        if (!showHiddenProviders && s.value !== translationMethod && isUiHiddenMethod(s.value)) return false;
         const status = getConfigStatus(s.value, translationConfigs?.[s.value] ?? getDefaultConfig(s.value));
         return status !== "needs-config" || s.value === translationMethod;
       }),
-    [translationConfigs, translationMethod],
+    [translationConfigs, translationMethod, showHiddenProviders],
   );
 
   const providerSelect = (
@@ -876,7 +900,7 @@ const TranslationSettings = () => {
       showSearch={{ optionFilterProp: "label" }}
       value={translationMethod}
       onChange={setTranslationMethod}
-      options={categorizedOptions}
+      options={getVisibleCategorizedOptions(showHiddenProviders, translationMethod)}
       aria-label={t("selectService")}
     />
   );
@@ -909,10 +933,11 @@ const TranslationSettings = () => {
                 // antd's CheckableTagProps omits DOM passthrough props, but the
                 // component spreads {...restProps} onto its <span> — so these
                 // forward at runtime; the cast just bridges the narrow types.
+                // ⚠ 不要覆盖 role / 加 aria-pressed：antd 在 restProps 之后自己写
+                // role="checkbox" + aria-checked，button+pressed 会被压成
+                // checkbox+pressed 的非法组合（axe aria-allowed-attr critical）。
                 {...({
-                  role: "button",
                   tabIndex: 0,
-                  "aria-pressed": s.value === translationMethod,
                   onKeyDown: (e: KeyboardEvent<HTMLSpanElement>) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
@@ -936,6 +961,19 @@ const TranslationSettings = () => {
       {supportsGlossary(translationMethod) && <GlossaryManager />}
 
       {isLLMModel && <GlobalPromptsPanel />}
+
+      {/* 订阅套餐端点(火山 Coding Plan、阿里 Token Plan)的唯一入口:默认
+          隐藏,显式 opt-in。警告文案承载官方文档的封号风险,别删 —— 见
+          registry volcengine / alibaba 条目注释。挪到整页最末作为次要操作,
+          避免在顶部跟主服务选择器争夺视觉焦点 —— 这是低频 opt-in,不该
+          抢顶部黄金位置。 */}
+      <Space size="small" wrap>
+        <Switch size="small" checked={showHiddenProviders} onChange={setShowHiddenProviders} aria-label={t("showCodingPlans")} />
+        <Text type="secondary">{t("showCodingPlans")}</Text>
+        <Tooltip title={t("showCodingPlansHelp")}>
+          <InfoCircleOutlined />
+        </Tooltip>
+      </Space>
     </div>
   );
 };

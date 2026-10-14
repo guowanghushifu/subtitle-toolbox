@@ -35,6 +35,12 @@
     "nameRequired": "Vui lòng nhập tên bảng thuật ngữ"
   },
   "common": {
+    "exportFolder": "Thư mục xuất",
+    "exportFolderDefault": "Tệp xuất ra nằm trong thư mục tải xuống mặc định.",
+    "exportFolderBlocked": "Trình duyệt không cho chọn chính Desktop, Documents, Downloads và thư mục người dùng — hãy chọn thư mục con hoặc thư mục khác.",
+    "exportFolderCurrent": "Tệp xuất ra sẽ nằm trong {dir}",
+    "exportFolderReset": "Quay lại thư mục tải xuống",
+    "exportFolderFailed": "Không thể đặt thư mục xuất.",
     "supportEscapeChars": "Hỗ trợ ký tự thoát: \\n (dòng mới), \\r (xuống dòng), \\t (tab), \\s (dấu cách), \\\\ (dấu gạch chéo ngược)",
     "skipToContent": "Chuyển đến nội dung chính",
     "fileProcessFailed": "Xử lý tệp thất bại — kiểm tra mã hóa hoặc thử tệp khác",
@@ -78,6 +84,8 @@
     "directExport": "Xuất tự động",
     "useCache": "Sử dụng bộ nhớ đệm",
     "useCacheTooltip": "Sử dụng lại bộ nhớ đệm dịch trước đó để tăng tốc xử lý",
+    "cacheOff": "Đã tắt bộ nhớ đệm",
+    "cacheOffTooltip": "Bộ nhớ đệm dịch đang tắt: mỗi dòng sẽ được yêu cầu lại và lần chạy bị gián đoạn không thể tiếp tục. Nhấp để bật lại.",
     "contextAwareTranslation": "Dịch theo ngữ cảnh",
     "contextAwareTranslationTooltip": "Dịch với ngữ cảnh để có sự mạch lạc và chính xác tốt hơn (chỉ mô hình AI)",
     "multiLanguageMode": "Chế độ đa ngôn ngữ",
@@ -152,7 +160,7 @@
     "copyAllFailed": "Sao chép tất cả",
     "closeFailedLinesModal": "Đóng",
     "failedLanguagesTitle": "{count} ngôn ngữ đích thất bại",
-    "failedLanguagesDesc": "Tất cả các lô cho các ngôn ngữ này đã thất bại — thường do trục trặc LLM cục bộ, giới hạn tốc độ API hoặc mô hình từ chối ngôn ngữ cụ thể. Sao chép mã và chạy lại chỉ cho chúng (dán vào Nhập nhanh bằng mã ngôn ngữ); những ngôn ngữ khác sẽ được bỏ qua từ bộ nhớ đệm.",
+    "failedLanguagesDesc": "Tất cả các lô cho các ngôn ngữ này đã thất bại — thường do trục trặc LLM cục bộ, giới hạn tốc độ API hoặc mô hình từ chối ngôn ngữ cụ thể. Sao chép mã và chạy lại chỉ cho chúng (dán vào 'Cài đặt đa ngôn ngữ'); những ngôn ngữ khác sẽ được bỏ qua từ bộ nhớ đệm.",
     "copyAllFailedLanguages": "Sao chép mã ngôn ngữ",
     "apiStatusFreeApi": "Free API",
     "apiStatusNeedsConfig": "Cần cấu hình",
@@ -169,10 +177,10 @@
     "resultToSourceTooltip": "Ghi đè văn bản kết quả vào ô nhập liệu",
     "readOnlyMode": "Chế độ chỉ đọc",
     "readOnlyModeTooltip": "Văn bản quá dài: trình soạn thảo tạm thời ở chế độ chỉ đọc và chỉ hiển thị bản xem trước một phần. Toàn bộ nội dung của bạn không bị ảnh hưởng — xử lý và xuất vẫn dùng toàn bộ văn bản.",
-    "clearInputTooltip": "Xóa nội dung đã nhập và tệp đã tải lên",
     "fileExported": "Đã xuất tệp: {fileName}",
+    "exportFailed": "Không thể xuất tệp: {fileName}",
+    "exportedToFolder": "Đã lưu vào {dir}: {fileName}",
     "batchDownloaded": "Xử lý hoàn tất, tệp đã được tải xuống tự động",
-    "sourceTextPlaceholder": "Nhập hoặc dán văn bản cần xử lý...",
     "smartLineBreak": "Xuống dòng thông minh",
     "replaceText": "Thay thế văn bản",
     "generateJson": "Tạo JSON",
@@ -207,8 +215,24 @@
     "errorHint5xx": "Lỗi máy chủ, vui lòng thử lại sau",
     "errorHintRelay": "Lỗi mạng (có thể do CORS) — hãy bật \"Chuyển tiếp API\" trong \"Thêm cài đặt Provider\"",
     "errorHintRelay403": "API trả về 403 Forbidden — hãy bật \"Chuyển tiếp API\" trong \"Thêm cài đặt Provider\"",
+    "errorHintCors": "Không thể kết nối tới địa chỉ này — hãy kiểm tra địa chỉ và xem dịch vụ có cho phép yêu cầu khác nguồn (CORS) hay không. Cổng tự dựng và mô hình cục bộ phải tự bật, hoặc dùng Chuyển tiếp API của riêng bạn",
     "errorHintGeminiKey": "Không thể kết nối Gemini: hãy kiểm tra mạng trước (một số mạng không thể truy cập trực tiếp dịch vụ Google). Nếu mạng bình thường, từ 19/06/2026 Google từ chối các API key không giới hạn — hãy tạo lại key trong AI Studio (mặc định đã giới hạn) hoặc thêm giới hạn Gemini API cho key cũ trong Google Cloud Console",
-    "rateLimitCooldown": "Đạt giới hạn yêu cầu — tạm dừng một lát rồi tự động thử lại"
+    "rateLimitCooldown": "Đạt giới hạn yêu cầu — tạm dừng một lát rồi tự động thử lại",
+    "faqHeading": "Câu hỏi thường gặp",
+    "homeIndexEyebrow": "Mục lục",
+    "homeCategoryEyebrow": "{n} danh mục",
+    "openNavigation": "Mở điều hướng",
+    "goHome": "Về trang chủ",
+    "primaryNav": "Điều hướng chính",
+    "toggleTheme": "Đổi giao diện",
+    "communityLinks": "Liên kết cộng đồng",
+    "viewOnGitHub": "Xem trên GitHub",
+    "toolCategories": "Danh mục công cụ",
+    "searchLanguage": "Tìm ngôn ngữ",
+    "selectLanguage": "Chọn ngôn ngữ",
+    "noMatchFound": "Không có kết quả",
+    "backToTop": "Lên đầu trang",
+    "exportOptions": "Tùy chọn xuất"
   },
   "SubtitleTranslator": {
     "clientDescription": "Tải lên phụ đề hoặc dán nội dung. Chọn ngôn ngữ đích để dịch nhanh. Hỗ trợ xử lý hàng loạt và giữ nguyên dòng thời gian.",
@@ -229,7 +253,7 @@
     "noSourceText": "Vui lòng tải tệp hoặc dán văn bản.",
     "noExtractedText": "Không trích xuất được nội dung, kiểm tra định dạng tệp.",
     "textExtracted": "Đã trích xuất văn bản phụ đề, ",
-    "bilingualError": "Phát hiện thẻ kiểu phức tạp. Chế độ song ngữ có thể gây lỗi định dạng. Khuyên dùng tắt 'Phụ đề song ngữ'.",
+    "bilingualError": "Phát hiện thẻ kiểu phức tạp. Chế độ song ngữ có thể gây lỗi định dạng. Khuyên dùng tắt 'Song ngữ'.",
     "reviewTitle": "Soát hai ngôn ngữ",
     "reviewColSource": "Nguồn",
     "reviewColTarget": "Bản dịch",
@@ -265,6 +289,9 @@
     "assAlignBottom": "Giữa dưới",
     "assAlignTop": "Giữa trên",
     "assMarginV": "Lề",
+    "assAutoWrap": "Tự động xuống dòng",
+    "assAutoWrapTooltip": "Khi xuất, các dòng quá dài được xuống dòng theo chiều rộng màn hình và cỡ chữ: ưu tiên cắt sau dấu câu, không bắt đầu dòng bằng dấu câu, giữ nguyên các xuống dòng thủ công",
+    "assAutoWrapCapacity": "≈{trans} ký tự/dòng (bản dịch) · {orig} (bản gốc)",
     "previewOriginal": "Bản gốc",
     "previewTranslation": "Bản dịch",
     "fontGroup": {
@@ -313,7 +340,7 @@
     "batchSize": "Số dòng đồng thời",
     "batchSizeExtra": "Yêu cầu đồng thời trong chế độ không ngữ cảnh. Quá cao sẽ kích hoạt giới hạn API",
     "contextBatchSize": "Đồng thời Chế độ Ngữ cảnh",
-    "contextBatchSizeExtra": "Lô đồng thời trong chế độ ngữ cảnh. Điều chỉnh «dòng ngữ cảnh» trước —— an toàn hơn cho tốc độ. Tăng cái này có rủi ro giới hạn",
+    "contextBatchSizeExtra": "Lô đồng thời trong chế độ ngữ cảnh. Điều chỉnh «dòng ngữ cảnh» trước — cách tăng tốc an toàn hơn. Tăng giá trị này dễ chạm giới hạn",
     "maxTokens": "Số Token Tối Đa",
     "maxTokensExtra": "Giới hạn token đầu ra của model. 0 = không giới hạn (mặc định nhà cung cấp). Đặt 2048-4096 cho model nội bộ (Ollama/llama.cpp) khi gặp vòng lặp lặp lại. Chạm giới hạn sẽ báo lỗi rõ ràng (không có nửa bản dịch trong cache); nếu bản dịch dài hợp lệ bị cắt, hãy tăng giá trị này.",
     "contextWindow": "Số dòng ngữ cảnh",
@@ -323,6 +350,7 @@
     "useRelay": "Chuyển tiếp API",
     "useRelayTooltip": "Bật bộ chuyển tiếp API nếu bạn gặp lỗi CORS hoặc 403. Khi đó yêu cầu đi qua bộ chuyển tiếp tới nhà cung cấp; nó chỉ chuyển tiếp mà không lưu gì.",
     "useRelayCustomUrl": "Đang dùng endpoint tùy chỉnh: trạm trung chuyển công cộng tích hợp chỉ chuyển tiếp các địa chỉ mà nó khai báo, nên địa chỉ này không bao giờ được gửi đến đó — yêu cầu đi thẳng. Để đi qua trung chuyển, hãy bật công tắc và nhập địa chỉ trung chuyển của riêng bạn bên dưới.",
+    "useRelayLocalOnly": "Địa chỉ cục bộ hoặc mạng riêng: chỉ máy này truy cập được, trạm trung chuyển không tới được — công tắc không có tác dụng với endpoint này.",
     "relayBase": "Địa chỉ trung chuyển",
     "relayBaseExtra": "Để trống để dùng trung chuyển tích hợp. Địa chỉ này áp dụng cho mọi dịch vụ đã bật trung chuyển và cần bạn tự triển khai cùng một Worker trung chuyển.",
     "relayBaseInvalid": "Địa chỉ không hợp lệ — cần URL đầy đủ bắt đầu bằng http:// hoặc https://, không có chuỗi truy vấn hay #phân đoạn, và không phải endpoint /api (chỉ nhập host hoặc tiền tố đường dẫn của trung chuyển). Dịch sẽ thất bại cho đến khi sửa; để trống để dùng trung chuyển tích hợp.",
@@ -332,7 +360,7 @@
     "presetSelect": "Chọn cài đặt sẵn",
     "presetSave": "Lưu như cài đặt sẵn mới",
     "presetDelete": "Xóa cài đặt sẵn hiện tại",
-    "presetNamePlaceholder": "Tên cấu hình (ví dụ: Phụ đề / Tài liệu kỹ thuật)",
+    "presetNamePlaceholder": "Tên cài đặt sẵn (ví dụ: Phụ đề / Tài liệu kỹ thuật)",
     "presetSaved": "Đã lưu như cài đặt sẵn mới",
     "presetDeleted": "Đã xóa cài đặt sẵn hiện tại",
     "presetNameRequired": "Vui lòng nhập tên cài đặt sẵn",
@@ -347,18 +375,21 @@
     "sendSystemPromptExtra": "Chỉ tắt khi chat template từ chối vai trò system — lỗi điển hình \"Conversations must start with a user prompt\" (ví dụ họ Gemma).",
     "selectService": "Chọn dịch vụ dịch thuật",
     "configuredServices": "Đã cấu hình",
+    "showCodingPlans": "Hiển thị điểm cuối của gói đăng ký",
+    "showCodingPlansHelp": "Đây là các điểm cuối dành riêng cho gói đăng ký (Volcengine Coding Plan, Alibaba Bailian Token Plan). Tài liệu chính thức nêu rõ: chỉ được dùng tương tác trong các công cụ lập trình AI; việc dùng Base URL và API key tương ứng ngoài phạm vi cho phép có thể bị coi là lạm dụng, dẫn đến ngừng gói hoặc khóa tài khoản / API key. Chỉ bật khi bạn đã hiểu rủi ro.",
     "globalPrompts": "Prompt LLM (toàn cục)",
     "globalPromptsExtra": "Tất cả dịch vụ LLM dùng chung bộ prompt này; chuyển dịch vụ sẽ không đặt lại chúng",
     "credentialsGroup": "Thông tin xác thực",
     "modelGroup": "Mô hình",
-    "callParamsGroup": "Tham số gọi"
+    "callParamsGroup": "Tham số gọi",
+    "temperature": "Nhiệt độ"
   },
   "tools": {
     "subtitleTranslator": {
-      "title": "Dịch giả Phụ đề",
+      "title": "Trình Dịch Phụ Đề",
       "description": "Dịch hàng loạt SRT, ASS, VTT, SBV, LRC. 120+ ngôn ngữ.",
       "metaTitle": "Dịch Phụ Đề Miễn Phí | Hàng Loạt SRT/VTT/ASS + Song Ngữ",
-      "metaDescription": "Trình dịch phụ đề SRT, ASS, VTT, SBV, LRC. 25+ engine: DeepSeek, Claude, GPT, DeepL, Google. 120+ ngôn ngữ, timecode, song ngữ.",
+      "metaDescription": "Trình dịch phụ đề SRT, ASS, VTT, SBV, LRC. 30+ engine: DeepSeek, Claude, GPT, DeepL, Google. 120+ ngôn ngữ, timecode, song ngữ.",
       "faq": [
         {
           "q": "Hỗ trợ những định dạng phụ đề nào? SRT, ASS, VTT, SBV và LRC đều dịch được chứ?",
@@ -366,7 +397,7 @@
         },
         {
           "q": "Phụ đề: dùng dịch máy hay dịch AI/LLM? Cái nào chất lượng tốt nhất, cái nào rẻ nhất?",
-          "a": "Để rẻ thì dùng dịch máy, để chất lượng thì dùng AI/LLM. Dịch máy (MT) rẻ hoặc miễn phí nhưng đối thoại nghe phẳng: Google bản miễn phí không tốn chi phí (đầu vào dài bị cắt); DeepL là đỉnh cao cho các ngôn ngữ châu Âu; Qwen-MT và Azure Translate tương tự. Các mô hình AI lớn (LLM) tính phí theo token nhưng nghe tự nhiên hơn rõ rệt — DeepSeek là giá trị tốt nhất cho khối lượng cả mùa; Claude Sonnet hoặc GPT-5 cho đối thoại tự nhiên nhất; ngữ cảnh 1M token của Gemini 3 Pro xử lý phụ đề cỡ một cuốn sách. Cấu hình engine được dùng chung với [Dịch JSON](../json-translate)."
+          "a": "Để rẻ thì dùng dịch máy, để chất lượng thì dùng AI/LLM. Dịch máy (MT) rẻ hoặc miễn phí nhưng đối thoại nghe phẳng: Google bản miễn phí không tốn chi phí (đầu vào dài bị cắt); DeepL là đỉnh cao cho các ngôn ngữ châu Âu; Qwen-MT và Azure Translate tương tự. Các mô hình AI lớn (LLM) tính phí theo token nhưng nghe tự nhiên hơn rõ rệt — DeepSeek là giá trị tốt nhất cho khối lượng cả mùa; Claude Sonnet hoặc GPT-6 cho đối thoại tự nhiên nhất; ngữ cảnh 1M token của Gemini xử lý phụ đề cỡ một cuốn sách. Cấu hình engine được dùng chung với [Dịch JSON](../json-translate)."
         },
         {
           "q": "Làm sao tạo phụ đề song ngữ cho YouTube hoặc học ngoại ngữ?",
@@ -402,16 +433,16 @@
         "Timecode không đổi — chỉ dịch văn bản, thời gian gốc được bảo toàn",
         "Tự phát hiện mã hóa UTF-8/UTF-16/GBK",
         "Vị trí phụ đề song ngữ: trên (học) hoặc dưới (xem)",
-        "25+ engine dịch: Google miễn phí, DeepSeek, Claude, GPT, Gemini, DeepL, Qwen-MT",
+        "30+ engine dịch: Google miễn phí, DeepSeek, Claude, GPT, Gemini, DeepL, Qwen-MT",
         "Tương thích với YouTube, Premiere, DaVinci Resolve, Aegisub"
       ]
     },
     "jsonTranslate": {
-      "title": "Dịch giả JSON i18n",
-      "description": "Công cụ dịch JSON đa ngôn ngữ hiệu quả"
+      "title": "Trình Dịch JSON i18n",
+      "description": "Dịch tệp ngôn ngữ i18n hàng loạt, với đối sánh JSONPath và ánh xạ khóa"
     },
     "mdTranslator": {
-      "title": "Dịch giả Markdown",
+      "title": "Trình Dịch Markdown",
       "description": "Dịch Markdown hàng loạt, giữ định dạng và mã"
     },
     "textSplitter": {
@@ -420,7 +451,7 @@
     },
     "chineseConversion": {
       "title": "Chuyển đổi Giản thể ↔ Phồn thể",
-      "description": "Chuyển đổi hàng loạt giữa giản thể, phồn thể Đài Loan, phồn thể Hồng Kông và chữ Nhật mới"
+      "description": "Hỗ trợ tải lên tệp và xử lý hàng loạt giữa chữ Giản thể, Phồn thể Đài Loan, Phồn thể Hồng Kông và Shinjitai Nhật Bản"
     },
     "novelProcessor": {
       "title": "Trình định dạng tiểu thuyết mạng Trung Quốc",
@@ -431,7 +462,7 @@
       "description": "Tích hợp regex, sắp xếp, lọc và nhiều tính năng xử lý văn bản hàng loạt"
     },
     "dataBatch": {
-      "title": "Xử lý văn bản",
+      "title": "Xử lý dữ liệu hàng loạt",
       "description": "Xử lý dữ liệu Excel hàng loạt — loại bỏ trùng, trích xuất cột, hợp nhất văn bản, quy tắc nối tiếp"
     },
     "textJoiner": {
@@ -463,7 +494,7 @@
       "description": "Sắp xếp và nhóm mảng, quy tắc tùy chỉnh"
     },
     "jsonMatchUpdate": {
-      "title": "Cập nhật JSON Match",
+      "title": "Khớp & Cập Nhật JSON",
       "description": "Cập nhật hàng loạt dựa trên khớp trường"
     },
     "dataParserFlare": {
@@ -475,7 +506,7 @@
       "description": "Tạo dữ liệu JSON IMGPrompt hàng loạt"
     },
     "textDiff": {
-      "title": "Text Diff",
+      "title": "So Sánh Văn Bản",
       "description": "So sánh hai văn bản hoặc tệp song song và xác định điểm khác biệt đầu tiên."
     }
   },
@@ -489,16 +520,18 @@
     "otherTools": "Thêm công cụ",
     "externalTools": {
       "legendtalk": "Bàn tròn nhà tư tưởng AI",
-      "imgprompt": "Câu lệnh tạo ảnh AI"
+      "imgprompt": "Câu lệnh tạo ảnh AI",
+      "learndata": "LearnData Ghi chú nguồn mở",
+      "hub365": "365 Nguồn mở"
     }
   },
   "Metadata": {
     "title": "ToolsByAI - Bộ Công Cụ Dịch Thuật & Dữ Liệu AI Online",
-    "description": "ToolsByAI: 19 công cụ mã nguồn mở miễn phí cho dịch phụ đề, Markdown, JSON i18n và xử lý văn bản/JSON. 25+ engine AI.",
+    "description": "ToolsByAI: 19 công cụ mã nguồn mở miễn phí cho dịch phụ đề, Markdown, JSON i18n và xử lý văn bản/JSON. 30+ engine AI.",
     "homeTitle": "Bộ ToolsByAI",
     "homeDescription": "19 công cụ cho dịch, văn bản, JSON và chuyển đổi dữ liệu. Tăng cường hiệu quả cho nhà phát triển và người sáng tạo.",
-    "ogTitle": "ToolsByAI - Công Cụ Dev AI Miễn Phí & Mã Nguồn Mở",
-    "ogDescription": "ToolsByAI: 19 công cụ mã nguồn mở miễn phí cho dịch phụ đề, Markdown, JSON i18n và xử lý văn bản/JSON. 25+ engine AI."
+    "ogTitle": "ToolsByAI - Bộ Công Cụ Dịch Thuật & Dữ Liệu AI Online",
+    "ogDescription": "ToolsByAI: 19 công cụ mã nguồn mở miễn phí cho dịch phụ đề, Markdown, JSON i18n và xử lý văn bản/JSON. 30+ engine AI."
   },
   "languages": {
     "auto": "Tự động phát hiện",

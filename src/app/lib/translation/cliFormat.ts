@@ -13,6 +13,7 @@ import type { TranslateBatchMeta, PipelineOutcome } from "./pipeline";
 import { splitTextIntoLines, hasPrecisionLossRisk } from "@/app/utils/textUtils";
 import {
   detectSubtitleFormat,
+  normalizeSrtVariantTimecodes,
   filterSubLines,
   prepareAssForTranslation,
   restoreAssAfterTranslation,
@@ -24,7 +25,7 @@ import {
   type BilingualFormat,
 } from "./formats/subtitle";
 import { MARKDOWN_DEFAULTS, filterMarkdownLines, restorePlaceholders, splitMarkdownSegments, mergeMarkdownSegments, applyRemoveCharsToMarkdown, applyRemoveCharsToSegments } from "./formats/markdown";
-import { softFilledIndices, transformSkippingSoftFilled, mapSkippingSoftFilled } from "./softFill";
+import { softFilledIndices, transformSkippingSoftFilled, mapSkippingSoftFilled, collectEmptiedSlots } from "./softFill";
 
 /** CLI 驱动提供给 handler 的能力(翻译、清理、命令行开关)。 */
 export interface CliFormatContext {
@@ -108,9 +109,12 @@ const subtitleHandler: CliFormatHandler = {
   extensions: [".srt", ".vtt", ".ass", ".ssa", ".lrc", ".sbv"],
 
   async run(text, ctx) {
-    const lines = splitTextIntoLines(text);
-    const fileType = detectSubtitleFormat(lines);
+    const rawLines = splitTextIntoLines(text);
+    const fileType = detectSubtitleFormat(rawLines);
     if (fileType === "error") throw new CliFileFormatError("unsupported subtitle format");
+    // 非规范时间码(裸秒 0.00 --> 29.98 / 省毫秒 00:30 --> 01:00)先归一成
+    // 标准时间码,下游只看见规范 SRT;同一文件里规范/非规范 cue 混排也兼容。
+    const lines = normalizeSrtVariantTimecodes(rawLines, fileType);
 
     const { contentLines, contentIndices, assContentStartIndex } = filterSubLines(lines, fileType);
     if (contentLines.length === 0) return null;
@@ -135,6 +139,9 @@ const subtitleHandler: CliFormatHandler = {
     // 软填槽位跳过 —— 规则与网页端共用同一份(lib/translation/softFill)。
     const softFilled = softFilledIndices(outcome);
     const cleaned = transformSkippingSoftFilled(outcome.lines, softFilled, isAss ? (ls) => applyRemoveCharsToAssLines(ls, ctx.removeChars) : ctx.applyRemoveChars);
+    // removeChars 有意清空的槽位(整行 ♪ 被删光)不能回退原文 —— 与网页端同一份
+    // 判据,比较发生在 ASS restore 之前。
+    const emptied = collectEmptiedSlots(outcome.lines, cleaned, softFilled);
     const translatedLines = isAss ? restoreAssAfterTranslation(cleaned, tagMaps) : cleaned;
 
     const content = assembleSubtitleOutput({
@@ -157,6 +164,11 @@ const subtitleHandler: CliFormatHandler = {
       // 与网页端同一份规则:只有引擎标记为软填的槽位才只出一半。按"译文==原文"
       // 判会把专有名词/数字/♪ 这类合法译成自身的行吃掉一半(见 isSoftFilledHalf)。
       softFilledIndices: softFilled,
+      emptiedIndices: emptied,
+      // ASS 宽度自适应换行(#69):默认值来自 SUBTITLE_DEFAULTS(与网页端同一常量),
+      // --no-ass-auto-wrap 显式关闭。只影响本工具生成头部的双语 ASS 路径
+      // (SRT/VTT→ass;原生 rebuild 网页专属,CLI 恒 false)。
+      assAutoWrap: triState(undefined, ctx.flags["no-ass-auto-wrap"], SUBTITLE_DEFAULTS.assAutoWrap),
     });
 
     return { content, ext: getOutputFileExtension(fileType, bilingual, bilingualFormat, ctx.sourceExt), bilingualSuffix: bilingual };
@@ -366,8 +378,8 @@ const jsonHandler: CliFormatHandler = {
     // 既非原文也非译文的东西(网页端把 removeChars 放在成功分支内)。
     // 用引擎给的 index,不再从 line 反推(independent 路径下二者恰好相等,
     // 但那是巧合 —— 这条路径一旦开始传 lineNumbers 就会静默错位)。
-    // 走共享 helper 而不是内联同一段逻辑 —— softFill.ts 的头注释说这个惯用法
-    // 曾在四处复制、而分歧「只会在用户的产物里显形」;JSON 路径不该是第五份。
+    // 走共享 helper 而不是内联同一段逻辑 —— 这个「跳过软填槽位」的惯用法多处
+    // 各写一份就会漂移，而分歧只会在用户的产物里显形（规则见 softFill.ts）。
     const cleaned = transformSkippingSoftFilled(outcome.lines, softFilledIndices(outcome), ctx.applyRemoveChars);
     cleaned.forEach((v, i) => setters[i](v));
 

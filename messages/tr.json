@@ -35,6 +35,12 @@
     "nameRequired": "Sözlük adı gerekli"
   },
   "common": {
+    "exportFolder": "Dışa aktarma klasörü",
+    "exportFolderDefault": "Dışa aktarılanlar varsayılan indirilenler klasörüne gider.",
+    "exportFolderBlocked": "Tarayıcı, Masaüstü, Belgeler, İndirilenler ve kullanıcı klasörünün kendisini kabul etmez — bir alt klasör ya da başka bir klasör seçin.",
+    "exportFolderCurrent": "Dışa aktarılanlar {dir} klasörüne gider",
+    "exportFolderReset": "İndirilenler klasörüne dön",
+    "exportFolderFailed": "Dışa aktarma klasörü ayarlanamadı.",
     "supportEscapeChars": "Kaçış karakterlerini destekler: \\n (yeni satır), \\r (dönüş), \\t (sekme), \\s (boşluk), \\\\ (ters eğik çizgi)",
     "skipToContent": "Ana içeriğe geç",
     "fileProcessFailed": "Dosya işlenemedi — kodlamasını kontrol edin veya başka bir dosya deneyin",
@@ -65,7 +71,7 @@
     "cancelKeepsProgress": "İptal etmek çevrilenleri korur",
     "dismiss": "Kapat",
     "translationAPI": "Çeviri API'si",
-    "enter": "Giriş",
+    "enter": "Lütfen girin",
     "getApiKey": "API Anahtarı Al",
     "charLabel": "Karakter",
     "lineLabel": "Satır",
@@ -78,6 +84,8 @@
     "directExport": "Otomatik Dışa Aktar",
     "useCache": "Önbellek Kullan",
     "useCacheTooltip": "İşlemi hızlandırmak için önceki çeviri önbelleğini yeniden kullan",
+    "cacheOff": "Önbellek kapalı",
+    "cacheOffTooltip": "Çeviri önbelleği kapalı: her satır yeniden istenir ve yarıda kesilen bir çalışma kaldığı yerden devam edemez. Yeniden açmak için tıklayın.",
     "contextAwareTranslation": "Bağlamsal Çeviri",
     "contextAwareTranslationTooltip": "Daha iyi tutarlılık ve doğruluk için bağlamla çeviri (yalnızca AI modelleri)",
     "multiLanguageMode": "Çoklu Dil Modu",
@@ -152,7 +160,7 @@
     "copyAllFailed": "Tümünü kopyala",
     "closeFailedLinesModal": "Kapat",
     "failedLanguagesTitle": "{count} hedef dil başarısız oldu",
-    "failedLanguagesDesc": "Bu diller için tüm yığınlar başarısız oldu — genellikle yerel LLM aksaklıkları, API hız sınırları veya modelin belirli bir dili reddetmesi nedeniyle. Kodları kopyalayın ve yalnızca onlar için yeniden çalıştırın (Dil Kodları ile Hızlı Giriş alanına yapıştırın); diğerleri önbellekten atlanacak.",
+    "failedLanguagesDesc": "Bu diller için tüm yığınlar başarısız oldu — genellikle yerel LLM aksaklıkları, API hız sınırları veya modelin belirli bir dili reddetmesi nedeniyle. Kodları kopyalayın ve yalnızca onlar için yeniden çalıştırın ('Çok Dilli Ayarlar' bölümüne yapıştırın); diğerleri önbellekten atlanacak.",
     "copyAllFailedLanguages": "Dil kodlarını kopyala",
     "apiStatusFreeApi": "Free API",
     "apiStatusNeedsConfig": "Yapılandırma gerekli",
@@ -169,10 +177,10 @@
     "resultToSourceTooltip": "Giriş kutusunun içeriğini sonuç metniyle değiştir",
     "readOnlyMode": "Salt Okunur Mod",
     "readOnlyModeTooltip": "Metin çok uzun: düzenleyici geçici olarak salt okunur ve yalnızca kısmi bir önizleme gösteriyor. Tüm içeriğiniz etkilenmez; işleme ve dışa aktarma hâlâ metnin tamamını kullanır.",
-    "clearInputTooltip": "Giriş içeriğini ve yüklenen dosyaları temizle",
     "fileExported": "Dışa aktarılan dosya: {fileName}",
+    "exportFailed": "Dosya dışa aktarılamadı: {fileName}",
+    "exportedToFolder": "{dir} klasörüne kaydedildi: {fileName}",
     "batchDownloaded": "İşlem tamamlandı, dosyalar otomatik olarak indirildi",
-    "sourceTextPlaceholder": "İşlenecek metni girin veya yapıştırın...",
     "smartLineBreak": "Akıllı satır sonu",
     "replaceText": "Metni değiştir",
     "generateJson": "JSON Oluştur",
@@ -207,8 +215,24 @@
     "errorHint5xx": "Sunucu hatası, lütfen daha sonra tekrar deneyin",
     "errorHintRelay": "Ağ hatası (muhtemelen CORS) — \"Daha fazla Provider ayarı\" bölümünde \"API Aktarıcı\"yı açın",
     "errorHintRelay403": "API 403 Forbidden döndürdü — \"Daha fazla Provider ayarı\" bölümünde \"API Aktarıcı\"yı açın",
+    "errorHintCors": "Bu adrese bağlanılamıyor — adresi ve servisin çapraz kaynak isteklerine (CORS) izin verip vermediğini kontrol edin. Kendi barındırdığınız ağ geçitleri ve yerel modellerde bunu kendiniz açmalısınız ya da kendi API Aktarıcınızı kullanın",
     "errorHintGeminiKey": "Gemini'ye ulaşılamıyor: önce ağınızı kontrol edin (bazı ağlar Google hizmetlerine doğrudan erişemez). Ağ sorunsuzsa, 19 Haziran 2026'dan itibaren Google kısıtlamasız API anahtarlarını reddediyor — anahtarınızı AI Studio'da yeniden oluşturun (varsayılan olarak kısıtlı) veya Google Cloud Console'da eski anahtara Gemini API kısıtlaması ekleyin",
-    "rateLimitCooldown": "İstek sınırına ulaşıldı — kısa bir duraklamadan sonra otomatik olarak yeniden denenecek"
+    "rateLimitCooldown": "İstek sınırına ulaşıldı — kısa bir duraklamadan sonra otomatik olarak yeniden denenecek",
+    "faqHeading": "Sık sorulan sorular",
+    "homeIndexEyebrow": "Dizin",
+    "homeCategoryEyebrow": "{n} kategori",
+    "openNavigation": "Gezinmeyi aç",
+    "goHome": "Ana sayfaya git",
+    "primaryNav": "Ana gezinme",
+    "toggleTheme": "Temayı değiştir",
+    "communityLinks": "Topluluk bağlantıları",
+    "viewOnGitHub": "GitHub’da görüntüle",
+    "toolCategories": "Araç kategorileri",
+    "searchLanguage": "Dil ara",
+    "selectLanguage": "Dil seç",
+    "noMatchFound": "eşleşme yok",
+    "backToTop": "Yukarı çık",
+    "exportOptions": "Dışa aktarma seçenekleri"
   },
   "SubtitleTranslator": {
     "clientDescription": "Altyazı yükleyin veya içerik yapıştırın. Hızlı çeviri için hedef dili seçin. Toplu işlemeyi destekler ve zaman çizelgesini korur.",
@@ -229,7 +253,7 @@
     "noSourceText": "Lütfen dosya yükleyin veya metin yapıştırın.",
     "noExtractedText": "İçerik çıkarılamadı, dosya formatını kontrol edin.",
     "textExtracted": "Altyazı metni çıkarıldı, ",
-    "bilingualError": "Karmaşık stil etiketleri algılandı. İki dilli mod format hatalarına neden olabilir. 'İki Dilli Altyazı'yı kapatmanız önerilir.",
+    "bilingualError": "Karmaşık stil etiketleri algılandı. İki dilli mod format hatalarına neden olabilir. 'İki Dilli'yi kapatmanız önerilir.",
     "reviewTitle": "İki dilli inceleme",
     "reviewColSource": "Kaynak",
     "reviewColTarget": "Çeviri",
@@ -265,6 +289,9 @@
     "assAlignBottom": "Alt orta",
     "assAlignTop": "Üst orta",
     "assMarginV": "Kenar boşluğu",
+    "assAutoWrap": "Otomatik satır kaydırma",
+    "assAutoWrapTooltip": "Dışa aktarırken çok uzun satırlar ekran genişliğine ve yazı boyutuna göre kaydırılır: tercihen noktalama işaretlerinden sonra kesilir, satır noktalama işaretiyle başlamaz, elle eklenen satır sonları korunur",
+    "assAutoWrapCapacity": "satır başına ≈{trans} karakter (çeviri) · {orig} (orijinal)",
     "previewOriginal": "Orijinal",
     "previewTranslation": "Çeviri",
     "fontGroup": {
@@ -308,7 +335,7 @@
     "for": "için",
     "textToTranslate": "çevrilecek metin",
     "fullText": "tam metin",
-    "chunkSize": "Parça Boyutu",
+    "chunkSize": "Blok Boyutu",
     "chunkSizeExtra": "Çok satırlı metin (Altyazı, Markdown) bu boyuta bölünecektir",
     "batchSize": "Eş zamanlı satırlar",
     "batchSizeExtra": "Bağlam dışı modda eşzamanlı istekler. Çok yüksek değer API hız sınırlarını tetikler",
@@ -323,6 +350,7 @@
     "useRelay": "API Aktarıcı",
     "useRelayTooltip": "CORS veya 403 hatası alırsanız API aktarıcıyı açın. İstekler o zaman sağlayıcıya giderken aktarıcıdan geçer; yalnızca iletir, hiçbir şey saklamaz.",
     "useRelayCustomUrl": "Özel uç nokta kullanılıyor: yerleşik genel aktarıcı yalnızca kendi bildirdiği adresleri iletir, bu nedenle bu adres oraya asla gönderilmez — istekler doğrudan gider. Aktarıcı üzerinden geçmek için anahtarı açın ve aşağıya kendi aktarıcı adresinizi girin.",
+    "useRelayLocalOnly": "Yerel veya özel ağ adresi: yalnızca bu bilgisayar erişebilir, aktarıcı ulaşamaz — bu uç noktada anahtarın etkisi yoktur.",
     "relayBase": "Aktarma adresi",
     "relayBaseExtra": "Yerleşik aktarmayı kullanmak için boş bırakın. Bu adres, aktarması açık olan tüm servisler için geçerlidir ve aynı aktarma Worker'ını kendiniz dağıtmanızı gerektirir.",
     "relayBaseInvalid": "Adres geçersiz — http:// veya https:// ile başlayan, sorgu dizesi veya #parça içermeyen ve /api uç noktası olmayan tam bir URL gerekir (yalnızca aktarmanın ana bilgisayarını veya yol önekini girin). Düzeltilene kadar çeviri başarısız olur; yerleşik aktarmayı kullanmak için alanı boş bırakın.",
@@ -347,18 +375,21 @@
     "sendSystemPromptExtra": "Yalnızca chat template system rolünü reddettiğinde kapatın — tipik hata \"Conversations must start with a user prompt\" (örn. Gemma ailesi).",
     "selectService": "Çeviri hizmeti seç",
     "configuredServices": "Yapılandırılmış",
+    "showCodingPlans": "Abonelik planı uç noktalarını göster",
+    "showCodingPlansHelp": "Bunlar abonelik planlarına özel uç noktalardır (Volcengine Coding Plan ve Alibaba Bailian Token Plan). Resmî belgeler, bunların yalnızca AI kodlama araçlarında etkileşimli kullanıma yönelik olduğunu belirtir; ilgili Base URL ve API anahtarının izin verilen kapsam dışında kullanılması kötüye kullanım sayılabilir ve aboneliğin askıya alınmasına veya hesabın / API anahtarının engellenmesine yol açabilir. Yalnızca riski anladıysanız etkinleştirin.",
     "globalPrompts": "LLM İstemleri (global)",
     "globalPromptsExtra": "Tüm LLM hizmetleri bu istemleri paylaşır; hizmet değiştirmek onları sıfırlamaz",
     "credentialsGroup": "Kimlik Bilgileri",
     "modelGroup": "Model",
-    "callParamsGroup": "Çağrı Parametreleri"
+    "callParamsGroup": "Çağrı Parametreleri",
+    "temperature": "Sıcaklık"
   },
   "tools": {
     "subtitleTranslator": {
       "title": "Altyazı Çevirici",
       "description": "Toplu SRT, ASS, VTT, SBV, LRC çevirisi. 120+ dil.",
       "metaTitle": "Ücretsiz Altyazı Çevirici | Toplu SRT/VTT/ASS + İki Dilli",
-      "metaDescription": "SRT, ASS, VTT, SBV, LRC altyazı çevirmeni. 25+ motor: DeepSeek, Claude, GPT, DeepL, Google. 120+ dil, zaman kodları, çift dilli.",
+      "metaDescription": "SRT, ASS, VTT, SBV, LRC altyazı çevirmeni. 30+ motor: DeepSeek, Claude, GPT, DeepL, Google. 120+ dil, zaman kodları, çift dilli.",
       "faq": [
         {
           "q": "Hangi altyazı formatları destekleniyor? SRT, ASS, VTT, SBV ve LRC çevrilebilir mi?",
@@ -366,7 +397,7 @@
         },
         {
           "q": "Altyazılar: makine çevirisi mi yoksa AI/LLM çevirisi mi kullanmalı? Hangisi en kaliteli, hangisi en ucuz?",
-          "a": "Ucuz için makine çevirisi, kalite için AI/LLM. Makine çevirisi (MT) ucuz veya ücretsiz ama diyalog düz okunur: Google ücretsiz sürümü hiçbir maliyet yok (uzun girdiler kesilir); DeepL Avrupa dilleri arasında zirve; Qwen-MT ve Azure Translate benzer. Büyük AI dil modelleri (LLM) token başına ücretlendirilir ama belirgin biçimde daha doğal okunur — DeepSeek tam sezon partileri için en iyi değer; Claude Sonnet veya GPT-5 en doğal diyalogları verir; Gemini 3 Pro'nun 1M token bağlamı kitap boyutundaki altyazılarla baş edebilir."
+          "a": "Ucuz için makine çevirisi, kalite için AI/LLM. Makine çevirisi (MT) ucuz veya ücretsiz ama diyalog düz okunur: Google ücretsiz sürümü maliyetsizdir (uzun girdiler kesilir); DeepL Avrupa dilleri arasında zirve; Qwen-MT ve Azure Translate benzer. Büyük AI dil modelleri (LLM) token başına ücretlendirilir ama belirgin biçimde daha doğal okunur — DeepSeek tam sezon partileri için en iyi değer; Claude Sonnet veya GPT-6 en doğal diyalogları verir; Gemini'nun 1M token bağlamı kitap boyutundaki altyazılarla baş edebilir."
         },
         {
           "q": "YouTube veya dil öğrenimi için iki dilli altyazı nasıl oluşturulur?",
@@ -374,7 +405,7 @@
         },
         {
           "q": "Bir seferde kaç altyazı dosyası toplu çevrilebilir? Bir sezonun tamamı için ne yapmalı?",
-          "a": "Tüm bir sezonun altyazılarını eş zamanlı çeviri için toplu yükleyebilirsiniz; sabit dosya sayısı limiti yoktur (gerçek sınır çeviri motorunun eşzamanlılığına ve API kotanıza bağlıdır). Her dosya bağımsız olarak çevrilir ve önbelleğe alınır (IndexedDB), bu nedenle sayfayı yenilemek çevrilmiş dosyaları kaybetmez. Bölümler arası ortak terminoloji (karakter adları, yer adları) için System Prompt içine bir sözlük koyun — tüm dosyalar aynı bağlamı paylaşır ve sezon boyunca tutarlı çeviri sağlanır."
+          "a": "Tüm bir sezonun altyazılarını eş zamanlı çeviri için toplu yükleyebilirsiniz; sabit dosya sayısı limiti yoktur (gerçek sınır çeviri motorunun eşzamanlılığına ve API kotanıza bağlıdır). Her dosya bağımsız olarak çevrilir ve önbelleğe alınır (IndexedDB), bu nedenle sayfayı yenilemek çevrilmiş dosyaları kaybetmez. Bölümler arası ortak terminoloji (karakter adları, yer adları) için Sistem İstemi içine bir sözlük koyun — tüm dosyalar aynı bağlamı paylaşır ve sezon boyunca tutarlı çeviri sağlanır."
         },
         {
           "q": "Altyazılardaki kişi adları, marka adları ve özel terimleri yanlış çevrilmemesi için nasıl korurum?",
@@ -402,13 +433,13 @@
         "Zaman kodları değiştirilmez — sadece metin çevrilir, orijinal zamanlama korunur",
         "UTF-8/UTF-16/GBK kodlama otomatik algılama",
         "İki dilli altyazı konumu: üst (öğrenme) veya alt (izleme)",
-        "25+ çeviri motoru: Google ücretsiz, DeepSeek, Claude, GPT, Gemini, DeepL, Qwen-MT",
+        "30+ çeviri motoru: Google ücretsiz, DeepSeek, Claude, GPT, Gemini, DeepL, Qwen-MT",
         "YouTube, Premiere, DaVinci Resolve, Aegisub ile uyumlu"
       ]
     },
     "jsonTranslate": {
       "title": "i18n JSON Çevirici",
-      "description": "Verimli çok dilli JSON çeviri aracı"
+      "description": "Toplu i18n dil dosyası çevirisi, JSONPath eşleştirme ve anahtar eşleme ile"
     },
     "mdTranslator": {
       "title": "Markdown Çevirici",
@@ -420,7 +451,7 @@
     },
     "chineseConversion": {
       "title": "Bas/Gel Çince Dönüştürücü",
-      "description": "Basitleştirilmiş, Tayvan geleneksel, Hong Kong geleneksel ve Japonca karakterleri toplu dönüştür"
+      "description": "Dosya yükleme ve toplu işlem desteğiyle Basitleştirilmiş, Tayvan/Hong Kong Geleneksel Çince ve Japon Shinjitai dönüştürme"
     },
     "novelProcessor": {
       "title": "Çince Web Roman Düzenleyici",
@@ -431,7 +462,7 @@
       "description": "Toplu işlem için regex eşleştirme, sıralama, filtreleme ve diğer işlevleri entegre eder"
     },
     "dataBatch": {
-      "title": "Kişisel Metin İşleyici",
+      "title": "Toplu Veri İşleyici",
       "description": "Excel toplu veri işleme — tekilleştirme, sütun çıkarma, metin birleştirme, zincirli kurallar"
     },
     "textJoiner": {
@@ -489,16 +520,18 @@
     "otherTools": "Daha Fazla Araç",
     "externalTools": {
       "legendtalk": "AI Düşünürler Yuvarlak Masası",
-      "imgprompt": "AI Görsel İstemleri"
+      "imgprompt": "AI Görsel İstemleri",
+      "learndata": "LearnData Açık Kaynak Notlar",
+      "hub365": "365 Açık Kaynak"
     }
   },
   "Metadata": {
     "title": "ToolsByAI - Geliştiriciler İçin Yapay Zeka ve Veri Araçları",
-    "description": "ToolsByAI: altyazı, Markdown, JSON i18n çevirisi ve metin/JSON toplu işleme için 19 ücretsiz açık kaynak araç. 25+ AI motoru.",
+    "description": "ToolsByAI: altyazı, Markdown, JSON i18n çevirisi ve metin/JSON toplu işleme için 19 ücretsiz açık kaynak araç. 30+ AI motoru.",
     "homeTitle": "ToolsByAI Paketi",
     "homeDescription": "Çeviri, metin, JSON ve veri dönüşümü için 19 araç. Geliştirici ve yaratıcı verimliliğini artırın.",
-    "ogTitle": "ToolsByAI - Ücretsiz ve Açık Kaynak Geliştirici Araçları",
-    "ogDescription": "ToolsByAI: altyazı, Markdown, JSON i18n çevirisi ve metin/JSON toplu işleme için 19 ücretsiz açık kaynak araç. 25+ AI motoru."
+    "ogTitle": "ToolsByAI - Geliştiriciler İçin Yapay Zeka ve Veri Araçları",
+    "ogDescription": "ToolsByAI: altyazı, Markdown, JSON i18n çevirisi ve metin/JSON toplu işleme için 19 ücretsiz açık kaynak araç. 30+ AI motoru."
   },
   "languages": {
     "auto": "Otomatik Algılama",

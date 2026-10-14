@@ -6,8 +6,9 @@ import { PlusOutlined, DeleteOutlined, UploadOutlined, DownloadOutlined, SearchO
 import { useTranslations } from "next-intl";
 import { useTranslationContext } from "@/app/components/TranslationContext";
 import { languages } from "@/app/lib/translation/languages-data";
-import { downloadFile, decodeFileBytes, getErrorMessage } from "@/app/utils";
+import { readTextFile, getErrorMessage } from "@/app/utils";
 import { mergeImportedTerms, parseGlossaryTsv, type GlossaryTerm } from "@/app/lib/translation/glossary";
+import { useFileExport } from "@/app/hooks/useFileExport";
 
 const LANG_OPTIONS = languages.filter((l) => l.value !== "auto").map((l) => ({ label: `${l.name} (${l.nativelabel})`, value: l.value }));
 const LANG_VALUES: ReadonlySet<string> = new Set(LANG_OPTIONS.map((l) => l.value));
@@ -19,6 +20,7 @@ const GlossaryDrawer = ({ open, onClose }: { open: boolean; onClose: () => void 
   const t = useTranslations("TranslationGlossary");
   const tCommon = useTranslations("common");
   const { message } = App.useApp();
+  const exportFile = useFileExport();
   const { activeGlossaryPreset, updateGlossaryPreset, targetLanguage } = useTranslationContext();
   const [selectedLang, setSelectedLang] = useState<string>(targetLanguage || "zh");
   const [search, setSearch] = useState("");
@@ -80,13 +82,13 @@ const GlossaryDrawer = ({ open, onClose }: { open: boolean; onClose: () => void 
       return;
     }
     const tsv = visibleTerms.map((term) => `${cleanCell(term.source)}\t${cleanCell(term.target)}`).join("\n");
-    downloadFile(tsv, `glossary-${selectedLang}.tsv`, "text/tab-separated-values");
+    void exportFile(tsv, `glossary-${selectedLang}.tsv`, "text/tab-separated-values");
   };
   // 3 列变体(source⇥target⇥targetLang):整个预设一个文件,跨设备/分享用。
   // 借鉴 DeepL 的多语言对上传格式 —— 我们只绑目标语言,三列即可。
   const exportAllTsv = () => {
     const tsv = allTerms.map((term) => `${cleanCell(term.source)}\t${cleanCell(term.target)}\t${term.targetLang}`).join("\n");
-    downloadFile(tsv, "glossary-all.tsv", "text/tab-separated-values");
+    void exportFile(tsv, "glossary-all.tsv", "text/tab-separated-values");
   };
 
   // 固定 TSV 单一格式:制表符在术语文本里几乎不会出现,无需 CSV 的引号/
@@ -94,14 +96,11 @@ const GlossaryDrawer = ({ open, onClose }: { open: boolean; onClose: () => void 
   // 语义(可选第 3 列语言码、merge-don't-wipe、大小写敏感 overlay)在
   // glossary.ts 的纯函数里,带单测。
   const importTsv = (file: File) => {
-    const reader = new FileReader();
-    // readAsArrayBuffer + decodeFileBytes 而非 readAsText:readAsText 只按
-    // UTF-8 解,中文 Windows 上 Excel 导出的 ANSI/GBK TSV 会被解成 U+FFFD
-    // 乱码,parse 后仍通过 source/target 非空过滤 —— 损坏的词条被【静默
-    // 持久化】还报导入成功,翻译时术语永远匹配不上。
-    reader.onload = async () => {
-      try {
-        const text = await decodeFileBytes(reader.result as ArrayBuffer);
+    // readTextFile(decodeFileBytes)而非 readAsText:readAsText 只按 UTF-8 解,中文
+    // Windows 上 Excel 导出的 ANSI/GBK TSV 会被解成 U+FFFD 乱码,parse 后仍通过
+    // source/target 非空过滤 —— 损坏的词条被【静默持久化】还报导入成功,翻译时术语永远匹配不上。
+    readTextFile(file)
+      .then((text) => {
         const parsed = parseGlossaryTsv(text, selectedLang, LANG_VALUES);
         if (saveTerms(mergeImportedTerms(allTerms, parsed))) {
           message.success(t("importDone", { count: parsed.length }));
@@ -109,18 +108,15 @@ const GlossaryDrawer = ({ open, onClose }: { open: boolean; onClose: () => void 
           // 活动预设已不存在(被另一标签页删除)——什么都没保存,不能报成功
           message.error(t("presetEmptyHint"));
         }
-      } catch (error) {
+      })
+      .catch((error: unknown) => {
         console.error("Glossary import failed:", error);
         // 【带上原始消息】,同 useFileUpload 的理由:decodeFileBytes 判不出编码时
         // 抛的是一句可操作的指引("re-save the file as UTF-8"),裸 fileReadFailed
         // 把它整个吞掉。这里比翻译工具更需要它 —— 中文 Windows 上 Excel 导出的
         // GBK TSV 正是这个功能存在的场景,而本抽屉连编码回退都没有。
         message.error(`${tCommon("fileReadFailed")}: ${getErrorMessage(error)}`);
-      }
-    };
-    // Don't swallow a failed read (locked file, odd encoding) silently.
-    reader.onerror = () => message.error(tCommon("fileReadFailed"));
-    reader.readAsArrayBuffer(file);
+      });
     return false;
   };
 
@@ -165,13 +161,13 @@ const GlossaryDrawer = ({ open, onClose }: { open: boolean; onClose: () => void 
         <Select aria-labelledby="glossary-lang-label" style={{ minWidth: 200 }} showSearch={{ optionFilterProp: "label" }} value={selectedLang} onChange={setSelectedLang} options={LANG_OPTIONS} />
         <Tooltip title={t("tsvHint")}>
           <Upload accept=".tsv,.txt" showUploadList={false} beforeUpload={importTsv}>
-            <Button icon={<UploadOutlined />}>{t("importTsv")}</Button>
+            <Button icon={<UploadOutlined aria-hidden />}>{t("importTsv")}</Button>
           </Upload>
         </Tooltip>
         {/* Split button: click = current language (2-col, DeepL-TSV compatible);
             menu = all languages (3-col with targetLang). */}
         <Space.Compact>
-          <Button icon={<DownloadOutlined />} onClick={exportTsv} disabled={allTerms.length === 0}>
+          <Button icon={<DownloadOutlined aria-hidden />} onClick={exportTsv} disabled={allTerms.length === 0}>
             {t("exportTsv")}
           </Button>
           <Dropdown
@@ -182,7 +178,9 @@ const GlossaryDrawer = ({ open, onClose }: { open: boolean; onClose: () => void 
               },
             }}
             disabled={allTerms.length === 0}>
-            <Button icon={<DownOutlined />} />
+            {/* The split button's toggle half has no text of its own, so without a
+                label its only accessible name was antd's English glyph name ("down"). */}
+            <Button icon={<DownOutlined aria-hidden />} aria-label={tCommon("exportOptions")} />
           </Dropdown>
         </Space.Compact>
       </Space>
@@ -198,7 +196,7 @@ const GlossaryDrawer = ({ open, onClose }: { open: boolean; onClose: () => void 
         {t("langHint")}
       </Typography.Paragraph>
       {duplicateSources.size > 0 && <Alert type="warning" showIcon title={t("duplicateHint")} style={{ marginBottom: 12 }} />}
-      <Button block type="dashed" icon={<PlusOutlined />} style={{ marginBottom: 12 }} onClick={addTerm}>{t("addTerm")}</Button>
+      <Button block type="dashed" icon={<PlusOutlined aria-hidden />} style={{ marginBottom: 12 }} onClick={addTerm}>{t("addTerm")}</Button>
       <Table
         size="small"
         rowKey="__originalIdx"
