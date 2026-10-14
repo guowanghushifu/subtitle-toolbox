@@ -23,7 +23,6 @@ env:
 
 jobs:
   push_to_registry:
-    if: github.repository_owner == 'rockbenben' # fork 无对应 secrets，跳过以免 CI 报错
     name: Push Docker image to Docker Hub and GHCR
     runs-on: ubuntu-latest
     timeout-minutes: 30
